@@ -1,163 +1,391 @@
-# IntelSent — Lean, Auditable SEC 10-K RAG
+# IntelSent
 
-**What it is (one line):** A small, fast RAG service for SEC 10‑Ks that returns **short, source‑grounded “drivers”** (e.g., “driven by Azure”) with citations. Cheap to run, easy to deploy.
+**API (Render):** https://intelsent.onrender.com/  
+**UI (Vercel):** https://intel-sent-bnhbx1kjb-mdgolammafuzs-projects.vercel.app
+
+SEC 10-K retrieval-augmented generation (RAG) service with explicit ingest, chunk, embed, and query stages, exposed through FastAPI and a minimal React/Vite UI. Includes auth (API key), rate limiting, Redis caching, LangSmith tracing hooks, and a Prefect-based “A2A” flow to run the whole pipeline inside Docker.
 
 ---
 
-## Quick Demo (Local)
+## 1. What this repository contains
 
-```bash
-uvicorn serving.api:app --reload
+- A FastAPI app (`serving/`) that:
+  - serves `/query` and `/query_min` for RAG answers,
+  - protects endpoints with API keys (`API_KEYS`),
+  - rate-limits with SlowAPI + Redis,
+  - exposes ingestion helpers for SEC 10-Ks (`/ingest/...`),
+  - exports debug endpoints to verify LangSmith env.
+- A RAG chain (`rag/`) that loads config from YAML and talks to pgvector.
+- A data pipeline (`data/`) to fetch 10-Ks from SEC, chunk them, and embed them into Postgres/pgvector.
+- A Prefect flow (`flows/prefect_a2a.py`) to do “ingest → chunk → embed → ask” in one go.
+- A minimal React UI (`ui/`) that hits the API with GET and query params (no preflight).
+- Docker and docker-compose files for a local stack with API + Redis + pgvector.
+
+---
+
+## 2. Repository layout (current)
+
+Top-level:
+
+```text
+.
+├── Dockerfile
+├── Dockerfile.psycopg
+├── Makefile
+├── Makefile.a2a
+├── README.md
+├── artifacts/
+├── config/
+├── data/
+├── db/
+├── docker-compose.api.yml
+├── docker-compose.redis.yml
+├── docker-compose.yml
+├── docs/
+├── eval/
+├── flows/
+├── k8s/
+├── rag/
+├── reports/
+├── requirements-api.txt
+├── requirements-dev.txt
+├── requirements.txt
+├── scripts/
+├── sec-edgar-filings/
+├── serving/
+├── tests/
+├── ui/
+└── utils/
 ```
 
-**Targeted Q&A (with a group hint):**
-```bash
-curl -s -X POST http://127.0.0.1:8000/query \
-  -H 'content-type: application/json' \
-  -d '{"text":"Which product or service was revenue growth driven by?","company":"MSFT","group_hint":"search","top_k":5}'
+UI subfolder (Vite React):
+
+```text
+ui/
+├── index.html
+├── eslint.config.js
+├── package.json
+├── package-lock.json
+├── src/
+│   ├── main.tsx
+│   ├── App.tsx
+│   └── api.ts
+├── tsconfig.json
+├── tsconfig.app.json
+├── tsconfig.node.json
+└── vite.config.ts
 ```
 
-**Drivers by segment (great for PMs/hiring panels):**
-```bash
-curl -s -X POST http://127.0.0.1:8000/drivers_by_segment \
-  -H 'content-type: application/json' \
-  -d '{"company":"MSFT","top_k":8}'
-```
-
-Open the interactive API: `http://127.0.0.1:8000/docs`
+This is enough for a reviewer to navigate quickly.
 
 ---
 
-## End‑to‑End Pipeline
-1. **Fetch** 10‑K HTML from the SEC Submissions API.  
-2. **Chunk** HTML→text into ~256‑token windows.  
-3. **Index** MiniLM embeddings (FAISS) + BM25 hybrid.  
-4. **Retrieve** dense+BM25 (alpha‑weighted) → candidate pool.  
-5. **Rerank** with a cross‑encoder.  
-6. **Extract** “driven by …” short phrases.  
-7. **Select** tiny learned selector (+ optional `group_hint`).  
-8. **Serve** FastAPI with citations.
+## 3. Runtime endpoints (API)
 
----
+Base URL (Render): **https://intelsent.onrender.com/**
 
-## Reproduce (Data → Eval → Serve)
+Key endpoints:
 
-```bash
-# Data
-python data/fetch_edgar_api.py
-python data/chunker.py
-python data/embedder.py
+- `/` → service info + config (redacted) + langsmith flags
+- `/healthz` → liveness probe
+- `/query` (POST) → full query, body JSON
+- `/query_min` (GET) → browser-friendly query (no preflight), accepts `api_key` query param
+- `/ingest/sec` (POST) → fetch specific ticker(s)/year(s) from SEC and store under `/app/data/...`
+- `/ingest/status` (GET) → check if a ticker/year is already ingested
+- `/actions/status` and `/actions/ingest` → same idea, but routed under `/actions`
+- `/debug/langsmith`, `/debug/ls_imports`, `/debug/ls_emit` → non-secret diagnostics (guarded by API key if set)
 
-# Eval set + tiny selector
-python scripts/build_eval_set.py
-python scripts/train_selector.py
-python scripts/eval_driver_dataset.py
+All protected endpoints accept:
+- `X-API-Key: <key>` header **or**
+- `?api_key=<key>` as query
 
-# Serve
-uvicorn serving.api:app --reload
-```
-
-**Current metrics (tiny eval set):**
-- Overall: Recall@5 = **1.00**, EM = **0.80**, Canonical‑EM = **0.90** (10 items)  
-- Revenue driver: Recall@5 = **1.00**, Canonical‑EM = **1.00** (6 items)
-
-> *Canonical‑EM treats equivalent wording as equal (e.g., “search and news advertising” ≡ “search”).*
-
----
-
-## Screenshots (PNGs under `docs/`)
-
-
-### 1) Drivers by Segment (Swagger)
-- Go to `http://127.0.0.1:8000/docs`
-- Expand **POST /drivers_by_segment** → **Try it out**
-- Use body: `{"company":"MSFT","top_k":8}`
-- Click **Execute**, scroll to **Response body**, crop *tightly* to the JSON `segments` object.
-
-![Drivers by Segment (Swagger)](docs/drivers_by_segment_swagger.png)
-
-### 2) Targeted Query (Swagger)
-- In `/docs`, expand **POST /query** → **Try it out**
-- Use body:
-  ```json
-  {
-    "text":"Which product or service was revenue growth driven by?",
-    "company":"MSFT",
-    "group_hint":"search",
-    "top_k":5
-  }
-  ```
-- Click **Execute**, crop to show only the short `"answer"` and the first chunk id/doc id.
-
-![Targeted Query (Swagger)](docs/query_swagger.png)
-
-### 3) Targeted Query (CLI, compact)
-- Run this to print a compact JSON (answer + citation IDs) to your terminal:
-  ```bash
-  curl -s -X POST http://127.0.0.1:8000/query \
-    -H 'content-type: application/json' \
-    -d '{"text":"Which product or service was revenue growth driven by?","company":"MSFT","group_hint":"search","top_k":5}' \
-  | python - <<'PY'
-import sys, json
-o=json.load(sys.stdin)
-print(json.dumps({
-  "answer": o["answer"],
-  "chunk_id": o["chunks"][0]["chunk_id"],
-  "doc_id": o["chunks"][0]["doc_id"]
-}, indent=2))
-PY
-  ```
-
-![Targeted Query (CLI, compact)](docs/query_cli_compact.png)
-
----
-
-## Compact Segment Drivers (Table)
-> Generate the table with this command:
+API keys are read from the environment:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/drivers_by_segment \
-  -H 'content-type: application/json' \
-  -d '{"company":"MSFT","top_k":8}' \
-| python - <<'PY'
-import sys,json
-o=json.load(sys.stdin)
-rows=[("segment","driver","chunk_id","doc_id")]
-for seg,v in o["segments"].items():
-    c=v.get("chunk",{}) or {}
-    rows.append((seg, v["driver"], c.get("chunk_id"), c.get("doc_id")))
-w=[max(len(str(x)) for x in col) for col in zip(*rows)]
-for r in rows:
-    print(" | ".join(str(x).ljust(w[i]) for i,x in enumerate(r)))
-PY
+API_KEYS=demo-key-123
 ```
 
-<!-- SEGMENT_TABLE_START -->
-segment | driver         | chunk_id | doc_id              
-cloud   | azure          | 442      | 0001564590-22-026876
-office  | office 365     | 428      | 0001564590-22-026876
-search  | search         | 428      | 0001564590-22-026876
-xbox    | xbox game pass | 428      | 0001564590-22-026876
-windows | search         | 442      | 0001564590-22-026876
-iphone  | search         | 442      | 0001564590-22-026876
-<!-- SEGMENT_TABLE_END -->
+Multiple keys can be comma-separated.
 
 ---
 
-## Notable Files
-- `serving/api.py` — FastAPI endpoints (`/query`, `/driver`, `/drivers_by_segment`)
-- `rag/retriever.py` — FAISS + BM25 hybrid retrieval
-- `rag/rerank.py` — cross‑encoder reranker
-- `rag/extract.py` — regex/anchor phrase extraction
-- `rag/selector.py` — learned selector (+ `group_hint`)
-- `utils/canon.py` — canonicalization for fair EM
-- `scripts/*` — fetch/chunk/embed/eval/train helpers
+## 4. Configuration files (important)
 
-## Options
-- **LangChain**: wrap retriever + reranker as an LC retriever tool.
-- **Kubernetes**: simple Deployment + Service; mount `artifacts/` as a volume.
-- **RAGAS**: add faithfulness/relevance on sampled queries.
-- **QLoRA**: optionally fine‑tune a tiny head for selection.
+### 4.1 `serving/settings.py`
+
+- Reads config path from env: `APP_CFG_PATH` or `APP_CONFIG`, falls back to `config/app.yaml`.
+- Exposes:
+  - `db_dsn`
+  - `langsmith_tracing` (from `LANGSMITH_TRACING`)
+  - `langsmith_project`
+  - `openai_api_key`
+- Returns a **redacted** config on `/` so reviewers can see which flags are on.
+
+### 4.2 `config/app.docker.yml`
+
+Used by the API container. Key parts:
+
+```yaml
+embedding:
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+  device: cpu
+
+pgvector:
+  enabled: true
+  conn: postgresql://intel:intel@pgvector:5432/intelrag
+  table: chunks
+  text_col: content
+```
+
+This tells the chain to talk to the pgvector service defined in docker compose.
+
+### 4.3 `config/app.local.yaml`
+
+Same as docker, but points pgvector at `127.0.0.1:5432` for local runs.
+
+### 4.4 `config/app.render.example.yml`
+
+Template for remote DBs (Neon, etc).
+
+---
+
+## 5. Running locally (Docker)
+
+1. **Export API key** (used by the container app):
+
+```bash
+export API_KEYS=demo-key-123
+```
+
+2. **Start API + Redis + pgvector**:
+
+```bash
+docker compose -f docker-compose.api.yml up -d --build
+```
+
+3. **Check health**:
+
+```bash
+curl -s http://localhost:8000/healthz
+```
+
+4. **Ingest a filing** (AAPL 2023):
+
+```bash
+curl -s -X POST http://localhost:8000/ingest/sec   -H 'Content-Type: application/json'   -d '{"companies":["AAPL"],"years":[2023]}'
+```
+
+This pulls from SEC, stores under `/app/data/sec-edgar-filings/AAPL/2023/` and appends to `/app/data/sec_catalog/sec_docs.csv`.
+
+5. **Chunk**:
+
+```bash
+docker exec -it intelsent-api bash -lc   "python -u data/chunker.py     --catalog /app/data/sec_catalog/sec_docs.csv     --input-root /app/data/sec-edgar-filings     --out /app/data/chunks/sec_chunks.csv"
+```
+
+6. **Embed**:
+
+```bash
+docker exec -it intelsent-api bash -lc   "python -u data/embedder.py     --chunks /app/data/chunks/sec_chunks.csv     --db-dsn postgresql://intel:intel@intel_pgvector:5432/intelrag     --table chunks --batch-size 128"
+```
+
+7. **Query**:
+
+```bash
+curl -s "http://localhost:8000/query_min?text=Which%20products%20drove%20revenue%20growth%3F&company=AAPL&year=2023&top_k=3&no_openai=true&api_key=demo-key-123"
+```
+
+---
+
+## 6. Prefect “A2A” flow
+
+To run the end-to-end flow (ingest → chunk → embed → ask) from the host:
+
+```bash
+export INTELSENT_API=http://localhost:8000
+export INTELSENT_KEY=demo-key-123
+export INTELSENT_CONTAINER=intelsent-api
+
+make -f Makefile.a2a a2a
+```
+
+This script:
+- ensures the API is healthy,
+- ensures SEC data for `AAPL 2023` (or the ticker/year passed in) is present,
+- runs chunker and embedder **inside the API container**,
+- calls `/query_min` and prints both answer and the first two contexts.
+
+Optional reset to clear duplicate chunks:
+
+```bash
+make -f Makefile.a2a a2a A2A_RESET=1
+```
+
+---
+
+## 7. Ingestion for other tickers (TSLA, AMZN, …)
+
+Current design is **explicit**: the API does **not** auto-fetch from SEC on a query miss.
+
+To ingest a new ticker/year:
+
+1. Check status:
+
+```bash
+curl -s "http://localhost:8000/ingest/status?company=TSLA&year=2023" | jq .
+```
+
+2. If `ingested: false`, ingest:
+
+```bash
+curl -s -X POST http://localhost:8000/ingest/sec   -H 'Content-Type: application/json'   -d '{"companies":["TSLA"],"years":[2023]}'
+```
+
+3. Run chunker + embedder (two docker execs as above).
+
+4. Query again and the new content should be retrieved.
+
+This is the trade-off: explicit ETL keeps the HTTP path fast and predictable; the cost is two short maintenance commands per new company/year.
+
+---
+
+## 8. Evaluation assets
+
+Located in `eval/`:
+
+- `eval/qa_small.jsonl` – 3 small QAs, all “Which product or service was revenue growth driven by?” for MSFT/AAPL 2022–2023.
+- `eval/reports/offline.json` – sample run output.
+
+The sample report shows:
+- `n_items: 3`
+- `retrieval_hit: 0.33`
+- `context_hit_rate: 0.083`
+- generation failed because the OpenAI key was not supplied and Docker profile forced `NO_OPENAI=1`. So the answer text is the fallback message.
+
+This is deliberate: the evaluation is in the repo to show how to measure the retrieval path, even when LLM calls are blocked. A reviewer can:
+1. set `OPENAI_API_KEY` in the container,
+2. re-run the eval script in `scripts/` or `eval/`,
+3. and see improved metrics.
+
+---
+
+## 9. LangSmith tracing
+
+The API is wired to LangSmith and exposes what it sees from the environment.
+
+Environment variables used:
+
+```bash
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=<your-langsmith-key>
+LANGCHAIN_PROJECT=IntelSent
+# optional
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+```
+
+To confirm from the outside (Render):
+
+```bash
+curl -s "https://intelsent.onrender.com/debug/langsmith?api_key=demo-key-123" | jq .
+curl -s "https://intelsent.onrender.com/debug/ls_emit?api_key=demo-key-123" | jq .
+```
+
+If both show `import_ok: true` and the emit endpoint says `emitted: true`, traces are being sent.
+
+---
+
+## 10. Security and operational notes
+
+- **API keys:** enforced in `serving/api.py` for all meaningful routes. Keys are **not** hardcoded; local demo uses `demo-key-123`, but the flow (`flows/prefect_a2a.py`) now refuses to run if `INTELSENT_KEY` is missing.
+- **Rate limiting:** configured with SlowAPI and backed by Redis (`REDIS_URL`), so the API cannot be hammered by the UI.
+- **CORS:** restricted to localhost dev origin and the deployed Vercel origin.
+- **Data location:** everything the SEC fetcher writes goes to `/app/data/...` (host bind `./data`), so filesystem inspection and cleanup are possible.
+- **GDPR/DSVGO:** data processed is US public company filings; no personal data is ingested by design. If any extra data is added later, it should go through the same explicit ingest path.
+
+---
+
+## 11. Deploy targets
+
+**Render API**  
+- URL: https://intelsent.onrender.com/  
+- Must set:
+  - `API_KEYS=demo-key-123`
+  - `LANGCHAIN_TRACING_V2=true`
+  - `LANGCHAIN_API_KEY=<real-key>`
+  - `LANGCHAIN_PROJECT=IntelSent`
+  - mount/ship `config/app.render.example.yml` as actual `APP_CONFIG` or keep default
+
+**Vercel UI**  
+- URL: https://intel-sent-bnhbx1kjb-mdgolammafuzs-projects.vercel.app  
+- Must set:
+  - `VITE_API_BASE=https://intelsent.onrender.com`
+  - `VITE_API_KEY=demo-key-123`
+
+---
+
+## 12. Future automation (not enabled by default)
+
+The current manual 4-step for a new ticker/year:
+
+1. `/ingest/sec`
+2. `data/chunker.py`
+3. `data/embedder.py`
+4. Query
+
+…can be automated by:
+- adding a background worker that listens for “no context” responses and enqueues ingest,
+- or extending the API to fire chunk/embed after a successful ingest.
+The code is already separated, so this is a small next step.
+
+---
+
+## 13. GDPR / Data Protection Notes
+
+This project processes only public SEC 10-K filings fetched from data.sec.gov. These filings do not contain end-user personal data. The system does not persist user questions beyond normal API/service logs.
+
+What is collected:
+- HTTP access logs from FastAPI/uvicorn (timestamp, path, status, request ID).
+
+- Rate-limit source (IP / remote address) via slowapi for abuse protection.
+
+- Optional: LangSmith trace metadata (prompt, inputs, outputs) when `LANGCHAIN_TRACING_V2=true`.
+
+How to run it in a stricter environment:
+
+1. Disable LangSmith by not setting LANGCHAIN_TRACING_V2 or LANGCHAIN_API_KEY.
+
+2. Put the API behind your own gateway and terminate logs there.
+
+3. Rotate API keys and keep API_KEYS= out of the repo.
+
+4. If you ingest internal reports instead of SEC data, you become the data controller — document your own retention and access rules.
+
+This setup is intended for demo/tech-screen use and does not constitute legal advice or a complete GDPR DPIA. For production, add a proper privacy notice, retention policy, and DSR handling.
+
+---
 
 ## License
-MIT
+
+This project is licensed under the **MIT License**.
+
+```text
+Copyright (c) 2025 <Your Name>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
