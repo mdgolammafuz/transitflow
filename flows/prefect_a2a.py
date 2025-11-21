@@ -5,7 +5,7 @@ import os, sys, subprocess, requests
 API = os.getenv("INTELSENT_API", "http://localhost:8000")
 CONTAINER = os.getenv("INTELSENT_CONTAINER", "intelsent-api")
 
-# 🔒 Require key from env; no default
+# Require key from env; no default
 KEY = os.getenv("INTELSENT_KEY")
 if not KEY:
     raise SystemExit("INTELSENT_KEY is not set. Export INTELSENT_KEY before running.")

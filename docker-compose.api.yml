@@ -1,3 +1,5 @@
+# version: "3.9"
+
 services:
   api:
     build:
@@ -12,7 +14,7 @@ services:
       --timeout-keep-alive 10
       --no-server-header
     environment:
-      # ---- force local-only (no OpenAI) ----
+      # ---- kill OpenAI completely ----
       NO_OPENAI: "1"
       OPENAI_API_KEY: ""
 
@@ -20,12 +22,13 @@ services:
       SKIP_CHAIN_INIT: "0"
 
       # ---- app config ----
-      API_KEYS: ${API_KEYS}          # from your shell/.env (no default here)
+      API_KEYS: ${API_KEYS}
       APP_CONFIG: /app/config/app.yaml
       HF_HOME: /app/.cache/hf
       REDIS_URL: redis://intelsent-redis:6379/0
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /app
+     
     ports:
       - "8000:8000"
     volumes:
@@ -69,4 +72,18 @@ services:
       timeout: 2s
       retries: 30
     volumes:
+      - pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: intelsent-ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  pgdata:
+  ollama_data:

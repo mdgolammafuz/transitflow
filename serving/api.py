@@ -303,7 +303,7 @@ def debug_ls_emit(request: Request) -> Dict[str, Any]:
 
 # Keep POST /query for API clients
 @app.post("/query", response_model=QueryResponse)
-@limiter.limit("10/minute;2/second")
+# @limiter.limit("10/minute;2/second")
 def query(
     request: Request,
     req: QueryRequest = Body(...),

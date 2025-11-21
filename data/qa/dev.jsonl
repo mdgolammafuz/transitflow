@@ -1,3 +1,0 @@
-{"question":"Which products drove revenue growth?","ground_truth":"higher net sales of iPhone and Services, partially offset by lower net sales of Mac and iPad","company":"AAPL","year":2023}
-{"question":"Which segment increased year over year?","ground_truth":"Services net sales increased 9%","company":"AAPL","year":2023}
-{"question":"What happened to Mac net sales?","ground_truth":"Mac net sales decreased 27%","company":"AAPL","year":2023}

@@ -19,6 +19,8 @@ COPY serving /app/serving
 COPY rag     /app/rag
 COPY utils   /app/utils
 COPY config  /app/config
+COPY scripts /app/scripts
+COPY eval    /app/eval
 # NOTE: data/ will be bind-mounted by docker-compose (see below)
 
 # default runtime env (can be overridden)
