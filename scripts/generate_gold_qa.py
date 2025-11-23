@@ -10,7 +10,7 @@ from typing import List, Dict, Any
 import yaml
 import google.generativeai as genai
 
-# --- Config Loader (Reused from your rag/chain.py logic) ---
+# --- Config Loader ---
 def _load_yaml(path: str) -> Dict[str, Any]:
     with open(path, "r") as f:
         return yaml.safe_load(f) or {}
@@ -83,7 +83,7 @@ def main():
         return
     
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash') # Fast & Free
+    model = genai.GenerativeModel('gemini-2.0-flash') # Fast & Free
 
     # 2. Connect to DB & Sample Chunks
     dsn = load_db_dsn(args.config)
