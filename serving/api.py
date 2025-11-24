@@ -337,6 +337,20 @@ def mcp_get_tools():
                     "required": ["companies", "metric", "years"],
                 },
             },
+            {
+                "name": "analyze_trend",
+                "description": "Analyze metric trend over multiple years for a company",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "company": {"type": "string", "description": "Company ticker"},
+                        "metric": {"type": "string", "description": "revenue, profit, R&D, etc."},
+                        "start_year": {"type": "integer", "description": "Start year"},
+                        "end_year": {"type": "integer", "description": "End year"},
+                    },
+                    "required": ["company", "metric", "start_year", "end_year"],
+                },
+            },
         ]
     }
 
@@ -374,6 +388,33 @@ def mcp_execute(
             metric=arguments["metric"],
             years=arguments["years"],
         )
+    
+    elif tool == "analyze_trend":
+        company = arguments["company"]
+        metric = arguments["metric"]
+        start_year = arguments["start_year"]
+        end_year = arguments["end_year"]
+        
+        years = list(range(start_year, end_year + 1))
+        results = {}
+        
+        for year in years:
+            question = f"What was {company}'s {metric} in {year}?"
+            try:
+                response = traced_chain_run(question, company, year, 3, False)
+                results[str(year)] = {
+                    "answer": response["answer"],
+                    "context": response.get("contexts", [])[0] if response.get("contexts") else ""
+                }
+            except Exception as e:
+                results[str(year)] = {"error": str(e)}
+        
+        return {
+            "company": company,
+            "metric": metric,
+            "years": years,
+            "trend": results,
+        }
     
     else:
         raise HTTPException(status_code=400, detail=f"Unknown tool: {tool}")
