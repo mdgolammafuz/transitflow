@@ -1,5 +1,4 @@
-# version: "3.9"
-
+# docker-compose.api.yml
 services:
   api:
     build:
@@ -14,14 +13,16 @@ services:
       --timeout-keep-alive 10
       --no-server-header
     environment:
-      # ---- kill OpenAI completely ----
+      # ---- LLM config ----
       NO_OPENAI: "1"
       OPENAI_API_KEY: ""
-      USE_HYBRID: "1"          # ADD THIS LINE
-
+      USE_HYBRID: "1"
+      USE_OLLAMA: "1" # USE OLLAMA
+      OLLAMA_BASE_URL: "http://intelsent-ollama:11434" 
+      OLLAMA_MODEL: "phi3:mini"
       # ---- ensure the chain initializes ----
       SKIP_CHAIN_INIT: "0"
-
+      
       # ---- app config ----
       API_KEYS: ${API_KEYS}
       APP_CONFIG: /app/config/app.yaml
@@ -29,7 +30,6 @@ services:
       REDIS_URL: redis://intelsent-redis:6379/0
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /app
-     
     ports:
       - "8000:8000"
     volumes:
@@ -48,6 +48,8 @@ services:
         condition: service_healthy
       pgvector:
         condition: service_healthy
+      ollama:
+        condition: service_started
 
   intelsent-redis:
     image: redis:7-alpine
