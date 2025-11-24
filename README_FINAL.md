@@ -595,6 +595,24 @@ IntelSent/
 └── README.md
 ```
 
+UI subfolder (Vite React):
+
+```text
+ui/
+├── index.html
+├── eslint.config.js
+├── package.json
+├── package-lock.json
+├── src/
+│   ├── main.tsx
+│   ├── App.tsx
+│   └── api.ts
+├── tsconfig.json
+├── tsconfig.app.json
+├── tsconfig.node.json
+└── vite.config.ts
+```
+
 ---
 
 ## License & Compliance
