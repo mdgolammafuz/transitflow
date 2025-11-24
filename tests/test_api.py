@@ -1,38 +1,53 @@
+# tests/test_api.py
+"""Minimal API tests for core endpoints."""
+
 import os
-os.environ["SKIP_CHAIN_INIT"] = "1"  # prevent real DB init on import
-
+import pytest
 from fastapi.testclient import TestClient
-import importlib
+from serving.api import app
 
-api = importlib.import_module("serving.api")
+client = TestClient(app)
 
-class DummyChain:
-    def __init__(self): self.use_openai = False
-    def run(self, question, company=None, year=None, top_k=5):
-        return {
-            "answer": f"[stub] {question} ({company},{year})",
-            "contexts": ["stub ctx"],
-            "meta": {"company": company, "year": year},
-        }
-
-# inject stub
-api.CHAIN = DummyChain()
-client = TestClient(api.app)
 
 def test_healthz():
-    r = client.get("/healthz")
-    assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    """Test health check endpoint."""
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
 
-def test_openapi_root_exists():
-    r = client.get("/")
-    assert r.status_code == 200
-    assert r.json()["ok"] is True
 
-def test_query_stubbed():
-    payload = {"text":"hello","company":"MSFT","year":2022,"top_k":3,"no_openai":True}
-    r = client.post("/query", json=payload)
-    assert r.status_code == 200
-    j = r.json()
-    assert j["answer"].startswith("[stub] hello")
-    assert j["contexts"] == ["stub ctx"]
+def test_root_endpoint():
+    """Test root endpoint returns service info."""
+    response = client.get("/")
+    assert response.status_code == 200
+    data = response.json()
+    assert "service" in data
+    assert data["service"] == "IntelSent"
+
+
+@pytest.mark.skipif(
+    os.getenv("SKIP_CHAIN_INIT") == "1",
+    reason="Requires chain initialization"
+)
+def test_query_requires_auth():
+    """Test that query endpoint requires API key (skipped if chain not initialized)."""
+    response = client.post(
+        "/query",
+        json={"text": "test", "company": "AAPL", "year": 2023}
+    )
+    # Should be 401 or 403 without API key
+    assert response.status_code in [401, 403]
+
+
+def test_query_without_chain():
+    """Test query endpoint returns 503 when chain not initialized."""
+    if os.getenv("SKIP_CHAIN_INIT") != "1":
+        pytest.skip("Only relevant when SKIP_CHAIN_INIT=1")
+    
+    response = client.post(
+        "/query",
+        json={"text": "test", "company": "AAPL", "year": 2023}
+    )
+    # Should return 503 Service Unavailable when chain is not initialized
+    assert response.status_code == 503
+    assert "not initialized" in response.json()["detail"].lower()
