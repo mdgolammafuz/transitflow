@@ -1,24 +1,20 @@
+# config/app.render.yaml
 artifacts_dir: artifacts
 
 embedding:
-  model_name: sentence-transformers/all-MiniLM-L6-v2
+  model_name: sentence-transformers/paraphrase-MiniLM-L3-v2  # LIGHTER MODEL
   device: cpu
 
 retrieval:
-  top_k: 10
-  max_k: 10
+  top_k: 5
+  max_k: 10  # Reduced for memory
 
 generation:
-  max_context_chars: 8000
-  model: gpt-4o-mini
+  max_context_chars: 4000  # Reduced for memory
   use_openai: false
-
-rerank:
-  enabled: false
-  model_name: cross-encoder/ms-marco-MiniLM-L-6-v2
 
 pgvector:
   enabled: true
   conn: postgresql://<NEON_USER>:<NEON_PASS>@<NEON_HOST>/<NEON_DB>  # placeholder ONLY
   table: chunks
-  text_col: text
+  text_col: content
