@@ -17,6 +17,7 @@ services:
       # ---- kill OpenAI completely ----
       NO_OPENAI: "1"
       OPENAI_API_KEY: ""
+      USE_HYBRID: "1"          # ADD THIS LINE
 
       # ---- ensure the chain initializes ----
       SKIP_CHAIN_INIT: "0"

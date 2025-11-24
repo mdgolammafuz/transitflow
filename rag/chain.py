@@ -14,12 +14,22 @@ from sentence_transformers import SentenceTransformer
 # ---------- optional flan-T5 tiny-LLM ----------
 try:
     from rag.generator import generate_answer as t5_generate_answer  # type: ignore
-
     _HAS_T5 = True
     _T5_NAME = "flan-t5-small"
 except Exception:
     _HAS_T5 = False
     _T5_NAME = "none"
+
+# ---------- LangChain imports (optional) ----------
+try:
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.retrievers import BaseRetriever
+    from langchain_core.documents import Document
+    from langchain_core.callbacks import CallbackManagerForRetrieverRun
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    BaseRetriever = object  # Fallback
 
 
 # ---------- tiny config helpers ----------
@@ -47,75 +57,6 @@ def _env_force_no_openai() -> bool:
 
 def _env_use_ollama() -> bool:
     return os.environ.get("USE_OLLAMA", "").lower() in {"1", "true", "yes"}
-
-
-def load_chain(cfg_path: str) -> "_SimpleChain":
-    """
-    Entry point used by serving/api.py.
-
-    - Builds a PGVectorRetriever wired to the `chunks` table.
-    - Creates a _SimpleChain that:
-        * retrieves top_k chunks from pgvector
-        * returns those chunks as `contexts`
-        * can optionally call a local LLM (Ollama) to summarize
-        * else falls back to a tiny flan-T5 generator (HF pipeline) if available
-    """
-    cfg = _load_yaml(cfg_path)
-
-    # Embedding config
-    embed_model = _get(
-        cfg,
-        "embedding.model_name",
-        "sentence-transformers/all-MiniLM-L6-v2",
-    )
-    embed_device = _get(cfg, "embedding.device", "cpu")
-
-    # pgvector DSN resolution
-    pg_dsn = (
-        _get(cfg, "pgvector.conn")
-        or _get(cfg, "db.conn_str")
-        or _get(cfg, "pgvector.dsn")
-        or "postgresql://intel:intel@pgvector:5432/intelrag"
-    )
-    table = _get(cfg, "pgvector.table", "chunks")
-    text_col_pref = _get(
-        cfg,
-        "pgvector.text_col",
-        _get(cfg, "pgvector.text_column", None),
-    )
-
-    # generation
-    max_context_chars = int(_get(cfg, "generation.max_context_chars", 6000))
-
-    # retrieval extras
-    rerank_keep = int(_get(cfg, "retrieval.rerank_keep", 5))
-
-    # LLM toggles
-    use_openai = _env_has_openai() and not _env_force_no_openai()
-    use_ollama = _env_use_ollama()
-
-    ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
-    ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
-
-    retriever = PGVectorRetriever(
-        dsn=pg_dsn,
-        table=table,
-        text_col_pref=text_col_pref,
-        embed_model=embed_model,
-        embed_device=embed_device,
-    )
-
-    chain = _SimpleChain(
-        retriever=retriever,
-        max_context_chars=max_context_chars,
-        rerank_keep=rerank_keep,
-        use_openai=use_openai,
-        use_ollama=use_ollama,
-        ollama_base_url=ollama_base_url,
-        ollama_model=ollama_model,
-        use_flan_t5=_HAS_T5,
-    )
-    return chain
 
 
 # ---------- pgvector retriever ----------
@@ -249,6 +190,56 @@ class PGVectorRetriever:
         return out
 
 
+# ---------- LangChain Retriever Wrapper ----------
+if LANGCHAIN_AVAILABLE:
+    class LangChainRetrieverWrapper(BaseRetriever):
+        """
+        Wraps any retriever (PGVectorRetriever, HybridRetriever) for LangChain.
+        Enables LangSmith tracing without changing your existing code.
+        """
+        
+        retriever: Any  # Your retriever instance
+        
+        class Config:
+            arbitrary_types_allowed = True
+        
+        def _get_relevant_documents(
+            self,
+            query: str,
+            *,
+            run_manager: Optional[CallbackManagerForRetrieverRun] = None,
+            **kwargs
+        ) -> List[Document]:
+            """Called by LangChain for retrieval."""
+            company = kwargs.get("company")
+            year = kwargs.get("year")
+            top_k = kwargs.get("top_k", 5)
+            
+            # Call your existing retriever
+            if hasattr(self.retriever, "get_relevant"):
+                results = self.retriever.get_relevant(query, company, year, top_k)
+            elif hasattr(self.retriever, "search"):
+                results = self.retriever.search(query, company, year, top_k)
+            else:
+                raise ValueError("Retriever must have get_relevant() or search() method")
+            
+            # Convert to LangChain Documents
+            docs = [
+                Document(
+                    page_content=r.get("chunk", ""),
+                    metadata={
+                        "id": r.get("id"),
+                        "company": r.get("company"),
+                        "year": r.get("year"),
+                        "score": r.get("distance", r.get("hybrid_score", 0)),
+                    }
+                )
+                for r in results
+            ]
+            
+            return docs
+
+
 # ---------- simple chain ----------
 class _SimpleChain:
     """
@@ -258,7 +249,7 @@ class _SimpleChain:
         { "answer": str, "contexts": [str], "meta": {...} }
 
     Retrieval:
-      - always pgvector (chunks table).
+      - PGVectorRetriever (dense) or HybridRetriever (dense + BM25)
 
     Answering:
       - if use_ollama and we have context: summarize from context with local LLM
@@ -269,7 +260,7 @@ class _SimpleChain:
 
     def __init__(
         self,
-        retriever: PGVectorRetriever,
+        retriever: Any,
         max_context_chars: int = 6000,
         rerank_keep: int = 5,
         use_openai: bool = False,
@@ -277,6 +268,7 @@ class _SimpleChain:
         ollama_base_url: Optional[str] = None,
         ollama_model: Optional[str] = None,
         use_flan_t5: bool = False,
+        enable_langchain: bool = False,
     ) -> None:
         self.retriever = retriever
         self.max_context_chars = max_context_chars
@@ -290,6 +282,11 @@ class _SimpleChain:
         self.ollama_model = ollama_model or "llama3.2:1b"
 
         self._openai_chat = None  # kept for serving.api compatibility
+
+        # LangChain wrapper (optional, for LangSmith tracing)
+        self.lc_retriever = None
+        if enable_langchain and LANGCHAIN_AVAILABLE:
+            self.lc_retriever = LangChainRetrieverWrapper(retriever=retriever)
 
         # For meta.llm
         if self.use_ollama:
@@ -318,8 +315,32 @@ class _SimpleChain:
         year: Optional[int],
         top_k: int,
     ) -> Dict[str, Any]:
-        # 1) retrieve
-        hits = self.retriever.get_relevant(question, company, year, top_k)
+        # 1) retrieve (use LangChain wrapper if available, for tracing)
+        if self.lc_retriever:
+            docs = self.lc_retriever.invoke(
+                question,
+                company=company,
+                year=year,
+                top_k=top_k
+            )
+            # Convert back to standard format
+            hits = [
+                {
+                    "id": doc.metadata["id"],
+                    "company": doc.metadata["company"],
+                    "year": doc.metadata["year"],
+                    "chunk": doc.page_content,
+                    "distance": doc.metadata["score"],
+                }
+                for doc in docs
+            ]
+        else:
+            # Standard retrieval (no LangChain)
+            if hasattr(self.retriever, "get_relevant"):
+                hits = self.retriever.get_relevant(question, company, year, top_k)
+            else:
+                hits = self.retriever.search(question, company, year, top_k)
+        
         hits = hits[: self.rerank_keep]
 
         # 2) pack context
@@ -338,12 +359,14 @@ class _SimpleChain:
         return {
             "answer": answer,
             "contexts": [h["chunk"] for h in kept],
+            "chunk_ids": [h["id"] for h in kept],
             "meta": {
                 "company": company,
                 "year": year,
                 "n_ctx": len(kept),
-                "retriever": "pgvector",
+                "retriever": "pgvector" if not hasattr(self.retriever, "search") else "hybrid",
                 "llm": self.llm_name,
+                "langchain_enabled": self.lc_retriever is not None,
             },
         }
 
@@ -473,3 +496,154 @@ class _SimpleChain:
             return resp.choices[0].message.content.strip()
         except Exception:
             return self._answer_locally(question, [])
+
+
+# ---------- load_chain (original, dense-only) ----------
+def load_chain(cfg_path: str) -> "_SimpleChain":
+    """
+    Original entry point used by serving/api.py.
+    
+    - Builds a PGVectorRetriever wired to the `chunks` table.
+    - Creates a _SimpleChain that:
+        * retrieves top_k chunks from pgvector
+        * returns those chunks as `contexts`
+        * can optionally call a local LLM (Ollama) to summarize
+        * else falls back to a tiny flan-T5 generator (HF pipeline) if available
+    """
+    cfg = _load_yaml(cfg_path)
+
+    # Embedding config
+    embed_model = _get(
+        cfg,
+        "embedding.model_name",
+        "sentence-transformers/all-MiniLM-L6-v2",
+    )
+    embed_device = _get(cfg, "embedding.device", "cpu")
+
+    # pgvector DSN resolution
+    pg_dsn = (
+        _get(cfg, "pgvector.conn")
+        or _get(cfg, "db.conn_str")
+        or _get(cfg, "pgvector.dsn")
+        or "postgresql://intel:intel@pgvector:5432/intelrag"
+    )
+    table = _get(cfg, "pgvector.table", "chunks")
+    text_col_pref = _get(
+        cfg,
+        "pgvector.text_col",
+        _get(cfg, "pgvector.text_column", None),
+    )
+
+    # generation
+    max_context_chars = int(_get(cfg, "generation.max_context_chars", 6000))
+
+    # retrieval extras
+    rerank_keep = int(_get(cfg, "retrieval.rerank_keep", 5))
+
+    # LLM toggles
+    use_openai = _env_has_openai() and not _env_force_no_openai()
+    use_ollama = _env_use_ollama()
+
+    ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
+
+    # LangChain toggle
+    enable_langchain = os.environ.get("ENABLE_LANGCHAIN", "false").lower() in {"1", "true", "yes"}
+
+    retriever = PGVectorRetriever(
+        dsn=pg_dsn,
+        table=table,
+        text_col_pref=text_col_pref,
+        embed_model=embed_model,
+        embed_device=embed_device,
+    )
+
+    chain = _SimpleChain(
+        retriever=retriever,
+        max_context_chars=max_context_chars,
+        rerank_keep=rerank_keep,
+        use_openai=use_openai,
+        use_ollama=use_ollama,
+        ollama_base_url=ollama_base_url,
+        ollama_model=ollama_model,
+        use_flan_t5=_HAS_T5,
+        enable_langchain=enable_langchain,
+    )
+    return chain
+
+
+# ---------- load_chain_hybrid (NEW, hybrid retrieval) ----------
+def load_chain_hybrid(cfg_path: str) -> "_SimpleChain":
+    """
+    NEW: Alternative loader with hybrid retrieval (dense + BM25).
+    
+    Same as load_chain() but uses HybridRetriever instead of PGVectorRetriever.
+    """
+    cfg = _load_yaml(cfg_path)
+
+    # Load config (same as load_chain)
+    embed_model = _get(cfg, "embedding.model_name", "sentence-transformers/all-MiniLM-L6-v2")
+    embed_device = _get(cfg, "embedding.device", "cpu")
+    pg_dsn = (
+        _get(cfg, "pgvector.conn")
+        or _get(cfg, "db.conn_str")
+        or _get(cfg, "pgvector.dsn")
+        or "postgresql://intel:intel@pgvector:5432/intelrag"
+    )
+    table = _get(cfg, "pgvector.table", "chunks")
+    text_col_pref = _get(cfg, "pgvector.text_col", _get(cfg, "pgvector.text_column", None))
+    max_context_chars = int(_get(cfg, "generation.max_context_chars", 6000))
+    rerank_keep = int(_get(cfg, "retrieval.rerank_keep", 5))
+    
+    # LLM config
+    use_openai = _env_has_openai() and not _env_force_no_openai()
+    use_ollama = _env_use_ollama()
+    ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
+    enable_langchain = os.environ.get("ENABLE_LANGCHAIN", "false").lower() in {"1", "true", "yes"}
+    
+    # NEW: Build hybrid retriever
+    try:
+        from rag.bm25_retriever import BM25Retriever
+        from rag.hybrid_retriever import HybridRetriever
+        
+        dense = PGVectorRetriever(
+            dsn=pg_dsn,
+            table=table,
+            text_col_pref=text_col_pref,
+            embed_model=embed_model,
+            embed_device=embed_device,
+        )
+        
+        bm25 = BM25Retriever(dsn=pg_dsn, table=table)
+        
+        retriever = HybridRetriever(
+            dense_retriever=dense,
+            bm25_retriever=bm25,
+            dense_weight=float(os.environ.get("HYBRID_DENSE_WEIGHT", "0.5")),
+        )
+    except ImportError as e:
+        # Fallback to dense-only if hybrid components not available
+        print(f"Warning: Could not load hybrid retriever: {e}")
+        print("Falling back to dense-only retrieval")
+        retriever = PGVectorRetriever(
+            dsn=pg_dsn,
+            table=table,
+            text_col_pref=text_col_pref,
+            embed_model=embed_model,
+            embed_device=embed_device,
+        )
+    
+    # Build chain (same as before)
+    chain = _SimpleChain(
+        retriever=retriever,
+        max_context_chars=max_context_chars,
+        rerank_keep=rerank_keep,
+        use_openai=use_openai,
+        use_ollama=use_ollama,
+        ollama_base_url=ollama_base_url,
+        ollama_model=ollama_model,
+        use_flan_t5=_HAS_T5,
+        enable_langchain=enable_langchain,
+    )
+    return chain

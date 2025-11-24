@@ -1,5 +1,4 @@
 # serving/api.py
-# comment to trigger a new commit and deploy on render (test)
 import os, sys, time, uuid
 from typing import Any, Dict, List, Optional
 
@@ -80,7 +79,22 @@ class DriverRequest(BaseModel):
 # Chain / cache / auth / limiter
 # --------------------------------------------------------------------------------------
 SKIP_CHAIN_INIT = os.getenv("SKIP_CHAIN_INIT", "").lower() in {"1","true","yes"}
-CHAIN = None if SKIP_CHAIN_INIT else load_chain(settings.app_cfg_path)
+USE_HYBRID = os.getenv("USE_HYBRID", "false").lower() in {"1", "true", "yes"}
+
+# Initialize CHAIN with hybrid support
+if SKIP_CHAIN_INIT:
+    CHAIN = None
+elif USE_HYBRID:
+    try:
+        from rag.chain import load_chain_hybrid
+        CHAIN = load_chain_hybrid(settings.app_cfg_path)
+        log.info("chain.loaded", mode="hybrid")
+    except Exception as e:
+        log.warning("chain.hybrid_failed", error=str(e), fallback="dense")
+        CHAIN = load_chain(settings.app_cfg_path)
+else:
+    CHAIN = load_chain(settings.app_cfg_path)
+    log.info("chain.loaded", mode="dense")
 
 CACHE = get_cache(ttl_s=int(os.getenv("CACHE_TTL_SECONDS", "600")))
 API_KEYS = {k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()}
@@ -128,7 +142,7 @@ def _ls_smoke(payload: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------------------
 # App (CORS FIRST)
 # --------------------------------------------------------------------------------------
-app = FastAPI(title="IntelSent API", version="0.5")
+app = FastAPI(title="IntelSent API", version="0.6")
 
 # CORS first so preflights never hit other middleware
 app.add_middleware(
@@ -239,7 +253,130 @@ def ingest_status(
         raise HTTPException(status_code=503, detail="ingest helpers unavailable")
     return {"ok": True, "ingested": is_ingested(company, year), "company": company, "year": year}
 
+@actions.post("/compare")
+def compare_companies(
+    companies: List[str] = Body(...),
+    metric: str = Body(...),
+    years: List[int] = Body(...),
+    _=Depends(require_api_key),
+):
+    """
+    Compare metric across multiple companies.
+    
+    Example:
+        POST /actions/compare
+        {
+          "companies": ["AAPL", "MSFT"],
+          "metric": "revenue",
+          "years": [2023]
+        }
+    """
+    if CHAIN is None:
+        raise HTTPException(status_code=503, detail="CHAIN not initialized")
+    
+    results = {}
+    all_sources = []
+    
+    for company in companies:
+        company_data = {}
+        for year in years:
+            question = f"What was {company}'s {metric} in {year}?"
+            
+            try:
+                response = traced_chain_run(question, company, year, 3, False)
+                company_data[str(year)] = response["answer"]
+                all_sources.extend(response.get("contexts", [])[:1])
+            except Exception as e:
+                log.error("compare.error", company=company, year=year, error=str(e))
+                company_data[str(year)] = f"Error: {str(e)}"
+        
+        results[company] = company_data
+    
+    return {
+        "metric": metric,
+        "companies": companies,
+        "years": years,
+        "comparison": results,
+        "sources": all_sources[:5],
+    }
+
 app.include_router(actions)
+
+# --------------------------------------------------------------------------------------
+# MCP endpoints
+# --------------------------------------------------------------------------------------
+@app.get("/mcp/tools")
+def mcp_get_tools():
+    """Get MCP tools manifest."""
+    return {
+        "tools": [
+            {
+                "name": "retrieve_filing",
+                "description": "Retrieve relevant chunks from SEC filing",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "company": {"type": "string", "description": "Company ticker (AAPL, MSFT, TSLA)"},
+                        "year": {"type": "integer", "description": "Fiscal year"},
+                        "question": {"type": "string", "description": "Query question"},
+                        "top_k": {"type": "integer", "default": 5},
+                    },
+                    "required": ["company", "year", "question"],
+                },
+            },
+            {
+                "name": "compare_companies",
+                "description": "Compare financial metrics across companies",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "companies": {"type": "array", "items": {"type": "string"}},
+                        "metric": {"type": "string", "description": "revenue, margin, R&D, etc."},
+                        "years": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["companies", "metric", "years"],
+                },
+            },
+        ]
+    }
+
+@app.post("/mcp/execute")
+def mcp_execute(
+    tool: str = Body(...),
+    arguments: Dict[str, Any] = Body(...),
+):
+    """Execute MCP tool."""
+    if CHAIN is None:
+        raise HTTPException(status_code=503, detail="CHAIN not initialized")
+    
+    if tool == "retrieve_filing":
+        company = arguments.get("company")
+        year = arguments.get("year")
+        question = arguments.get("question")
+        top_k = arguments.get("top_k", 5)
+        
+        response = traced_chain_run(question, company, year, top_k, False)
+        
+        return {
+            "company": company,
+            "year": year,
+            "question": question,
+            "answer": response["answer"],
+            "chunks": [
+                {"text": ctx, "index": i}
+                for i, ctx in enumerate(response.get("contexts", []))
+            ],
+        }
+    
+    elif tool == "compare_companies":
+        return compare_companies(
+            companies=arguments["companies"],
+            metric=arguments["metric"],
+            years=arguments["years"],
+        )
+    
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown tool: {tool}")
 
 # --------------------------------------------------------------------------------------
 # Startup
@@ -255,6 +392,7 @@ def startup() -> None:
         app_config=settings.app_cfg_path,
         drivers_cfg_loaded=bool(DRIVERS_CFG),
         chain_initialized=CHAIN is not None,
+        chain_mode="hybrid" if USE_HYBRID else "dense",
         config=settings.redacted(),
         langsmith_env=_langsmith_env(),
         langsmith_import_ok=_ls_import_ok,
@@ -269,10 +407,12 @@ def root() -> Dict[str, Any]:
     return {
         "ok": True,
         "service": "IntelSent",
+        "version": "0.6",
         "config": settings.redacted(),
         "drivers_cfg_loaded": bool(DRIVERS_CFG),
         "chain_initialized": CHAIN is not None,
-        "langsmith_env": _langsmith_env(),   # shows if LS env reached the process
+        "chain_mode": "hybrid" if USE_HYBRID else "dense",
+        "langsmith_env": _langsmith_env(),
         "langsmith_import_ok": _ls_import_ok,
         "langsmith_version": _ls_version,
     }
@@ -287,7 +427,7 @@ def metrics() -> str:
 
 @app.get("/debug/langsmith")
 def debug_langsmith(request: Request) -> Dict[str, Any]:
-    _check_key(None, request)  # respect API key if configured
+    _check_key(None, request)
     return _langsmith_env() | {"import_ok": _ls_import_ok, "version": _ls_version}
 
 @app.get("/debug/ls_imports")
@@ -304,7 +444,6 @@ def debug_ls_emit(request: Request) -> Dict[str, Any]:
 
 # Keep POST /query for API clients
 @app.post("/query", response_model=QueryResponse)
-# @limiter.limit("10/minute;2/second")
 def query(
     request: Request,
     req: QueryRequest = Body(...),
@@ -319,6 +458,9 @@ def query(
     cached = CACHE.get(cache_key)
     if cached: return QueryResponse(**cached)
     out = traced_chain_run(req.text, req.company, req.year, req.top_k, not req.no_openai)
+    # Add chunk_ids to meta for eval
+    if "chunk_ids" in out and "meta" in out:
+        out["meta"]["chunk_ids"] = out["chunk_ids"]
     CACHE.set(cache_key, out)
     return QueryResponse(**out)
 
@@ -344,5 +486,8 @@ def query_min(
     cached = CACHE.get(cache_key)
     if cached: return QueryResponse(**cached)
     out = traced_chain_run(text, company, year, top_k, not no_openai)
+    # Add chunk_ids to meta for eval
+    if "chunk_ids" in out and "meta" in out:
+        out["meta"]["chunk_ids"] = out["chunk_ids"]
     CACHE.set(cache_key, out)
     return QueryResponse(**out)

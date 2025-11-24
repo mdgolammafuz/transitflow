@@ -47,3 +47,7 @@ openai>=1.40.0
 
 # Observability / Tracing
 langsmith>=0.1.90
+
+# reranker
+# flashrank-0.2.10
+rank-bm25==0.2.2
