@@ -20,6 +20,13 @@ services:
       USE_OLLAMA: "1" # USE OLLAMA
       OLLAMA_BASE_URL: "http://intelsent-ollama:11434" 
       OLLAMA_MODEL: "phi3:mini"
+
+      # ---- LangSmith tracing ----
+      LANGCHAIN_TRACING_V2: "true"
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
+      LANGCHAIN_PROJECT: "IntelSent"
+      # ---- for A2A and MCP integration ----
+      CONTAINER_NAME: "intelsent-api" 
       # ---- ensure the chain initializes ----
       SKIP_CHAIN_INIT: "0"
       
