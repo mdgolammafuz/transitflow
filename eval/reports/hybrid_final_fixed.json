@@ -1,0 +1,31 @@
+{
+  "n_items": 47,
+  "failed_requests": 1,
+  "request_success_rate": 0.9787234042553191,
+  "latency_ms_overall": {
+    "mean_ms": 6159.132598339521,
+    "p50_ms": 2347.542375093326,
+    "p95_ms": 4254.4538873946285,
+    "max_ms": 120017.19770790078
+  },
+  "latency_ms_success_only": {
+    "mean_ms": 3683.9572698707975,
+    "p50_ms": 2275.1310624880716,
+    "p95_ms": 4033.2113229087554,
+    "max_ms": 64883.50583310239
+  },
+  "quality_success_only": {
+    "n_success": 46,
+    "exact_match": 0.0,
+    "contains_match": 0.043478260869565216,
+    "token_f1": 0.035942546724767876,
+    "retrieval_hit": 0.5217391304347826,
+    "context_hit_rate": 0.37391304347826093,
+    "mrr": 0.28985507246376807,
+    "hit@1": 0.2608695652173913,
+    "hit@3": 0.32608695652173914,
+    "hit@5": 0.32608695652173914,
+    "answer_len_tokens_mean": 6.282608695652174,
+    "avg_context_len_tokens_mean": 127.54420289855071
+  }
+}
