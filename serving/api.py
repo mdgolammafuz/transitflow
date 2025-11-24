@@ -150,6 +150,9 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "https://intel-ui.vercel.app",
+        "http://localhost:5173",
+        "https://intel-sent.vercel.app",
+        "https://intel-sent-bnhbx1kjb-mdgolammafuzs-projects.vercel.app",
     ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["GET","POST","OPTIONS"],
