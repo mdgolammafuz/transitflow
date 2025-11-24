@@ -326,6 +326,33 @@ python scripts/eval_offline.py \
 
 ---
 
+## 10. LLM Configuration
+
+### Default: flan-t5-small (CPU-optimized)
+- **Latency**: 2-3s per query
+- **Quality**: Limited answer extraction
+- **Use case**: Fast demos, development
+
+### Alternative: phi3:mini (Better quality)
+- **Latency**: 3+ minutes per query on CPU
+- **Quality**: Improved reasoning and extraction
+- **Use case**: Quality showcase (when time permits)
+
+**Enable phi3:**
+```bash
+# Set env vars in docker-compose.api.yml
+USE_OLLAMA: "1"
+OLLAMA_MODEL: "phi3:mini"
+OLLAMA_BASE_URL: "http://intelsent-ollama:11434"
+
+# Restart
+docker-compose -f docker-compose.api.yml down
+docker-compose -f docker-compose.api.yml up -d
+```
+
+**Important**: Answer quality is limited by model size and CPU constraints. **Retrieval quality (32.6% hit@5, see benchmark) is independent of LLM choice.** Production deployments would use GPT-4/Claude API or GPU-accelerated inference.
+
+---
 ## 10. LangSmith tracing
 
 The API is wired to LangSmith and exposes what it sees from the environment.
