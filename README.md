@@ -109,6 +109,36 @@ Multiple keys can be comma-separated.
 
 ---
 
+## 4. MCP (Model Context Protocol) Support
+
+IntelSent exposes MCP-compatible tools for AI agent integration. Tools orchestrate multi-step queries beyond basic RAG.
+
+### Available Tools
+
+**`retrieve_filing`** - Single query
+```bash
+curl -X POST http://localhost:8000/mcp/execute \
+  -d '{"tool":"retrieve_filing","arguments":{"company":"AAPL","year":2023,"question":"What was revenue?"}}'
+```
+
+**`compare_companies`** - Multi-company comparison (orchestrates N queries)
+```bash
+curl -X POST http://localhost:8000/mcp/execute \
+  -d '{"tool":"compare_companies","arguments":{"companies":["AAPL","MSFT"],"metric":"revenue","years":[2023]}}'
+```
+
+**`analyze_trend`** - Time-series trend (orchestrates multi-year queries)
+```bash
+curl -X POST http://localhost:8000/mcp/execute \
+  -d '{"tool":"analyze_trend","arguments":{"company":"AAPL","metric":"revenue","start_year":2022,"end_year":2023}}'
+```
+
+**Interactive testing**: http://localhost:8000/docs → `/mcp/*` endpoints
+
+**Note**: Answer extraction limited by flan-t5-small. Retrieval works well (see Benchmark). Production would use GPT-4/Claude.
+
+---
+
 ## 4. Configuration files (important)
 
 ### 4.1 `serving/settings.py`
