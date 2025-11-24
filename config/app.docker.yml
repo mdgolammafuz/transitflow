@@ -1,9 +1,8 @@
-# config/app.docker.yml  (mounted as /app/config/app.yaml)
-
+# config/app.docker.yml
 artifacts_dir: artifacts
 
 embedding:
-  model_name: sentence-transformers/all-MiniLM-L6-v2
+  model_name: sentence-transformers/all-MiniLM-L6-v2 
   device: cpu
 
 retrieval:
@@ -12,7 +11,7 @@ retrieval:
 
 generation:
   max_context_chars: 6000
-  
+
 llm:
   provider: ollama
   model: phi3:mini
