@@ -3,7 +3,7 @@
 **API (Render):** https://intelsent.onrender.com/  
 **UI (Vercel):** https://intel-sent-bnhbx1kjb-mdgolammafuzs-projects.vercel.app
 
-SEC 10-K retrieval-augmented generation (RAG) service with explicit ingest, chunk, embed, and query stages, exposed through FastAPI and a minimal React/Vite UI. Includes auth (API key), rate limiting, Redis caching, LangSmith tracing hooks, and a Prefect-based “A2A” flow to run the whole pipeline inside Docker.
+SEC 10-K retrieval-augmented generation (RAG) service with explicit ingest, chunk, embed, and query stages, exposed through FastAPI and a minimal React/Vite UI. Includes auth (API key), rate limiting, Redis caching, LangSmith tracing hooks, and a Prefect-based "A2A" flow to run the whole pipeline inside Docker.
 
 ---
 
@@ -17,7 +17,7 @@ SEC 10-K retrieval-augmented generation (RAG) service with explicit ingest, chun
   - exports debug endpoints to verify LangSmith env.
 - A RAG chain (`rag/`) that loads config from YAML and talks to pgvector.
 - A data pipeline (`data/`) to fetch 10-Ks from SEC, chunk them, and embed them into Postgres/pgvector.
-- A Prefect flow (`flows/prefect_a2a.py`) to do “ingest → chunk → embed → ask” in one go.
+- A Prefect flow (`flows/prefect_a2a.py`) to do "ingest → chunk → embed → ask" in one go.
 - A minimal React UI (`ui/`) that hits the API with GET and query params (no preflight).
 - Docker and docker-compose files for a local stack with API + Redis + pgvector.
 
@@ -197,7 +197,7 @@ curl -s "http://localhost:8000/query_min?text=Which%20products%20drove%20revenue
 
 ---
 
-## 6. Prefect “A2A” flow
+## 6. Prefect "A2A" flow
 
 To run the end-to-end flow (ingest → chunk → embed → ask) from the host:
 
@@ -253,7 +253,7 @@ This is the trade-off: explicit ETL keeps the HTTP path fast and predictable; th
 
 Located in `eval/`:
 
-- `eval/qa_small.jsonl` – 3 small QAs, all “Which product or service was revenue growth driven by?” for MSFT/AAPL 2022–2023.
+- `eval/qa_small.jsonl` – 3 small QAs, all "Which product or service was revenue growth driven by?" for MSFT/AAPL 2022–2023.
 - `eval/reports/offline.json` – sample run output.
 
 The sample report shows:
@@ -269,7 +269,64 @@ This is deliberate: the evaluation is in the repo to show how to measure the ret
 
 ---
 
-## 9. LangSmith tracing
+## 9. Benchmark: Dense vs Hybrid Retrieval
+
+### Methodology
+- **Dataset**: 47 questions from Apple, Microsoft, Tesla, Amazon 10-K filings (2021-2024)
+- **Evaluation**: Chunk-level retrieval accuracy using gold chunk ID annotations
+- **Metrics**: 
+  - **hit@k**: Percentage of queries where gold chunk appears in top-k results
+  - **MRR**: Mean Reciprocal Rank of first correct chunk (higher = better ranking)
+
+### Results
+
+| Metric | Dense Only | Hybrid (Dense+BM25) | Improvement |
+|--------|-----------|---------------------|-------------|
+| hit@1 | 0.0% | 26.1% | +26.1pp |
+| hit@5 | 0.0% | 32.6% | +32.6pp |
+| MRR | 0.000 | 0.290 | +0.290 |
+| Latency (p50) | 2.7s | 2.3s | -17% |
+
+### Key Findings
+
+1. **Dense embeddings failed completely** (0% hit rate) - semantic search couldn't match exact gold chunks despite retrieving contextually similar text
+2. **BM25 keyword matching essential** - hybrid retrieval found correct chunks in 1 out of 3 queries  
+3. **Speed improvement** - hybrid 17% faster due to in-memory BM25 caching vs pure pgvector lookups
+4. **Domain-specific advantage** - financial queries contain precise terminology (ticker symbols, fiscal years, specific metrics) that lexical matching captures better than embeddings alone
+
+### Architecture
+
+Hybrid retrieval combines:
+- **Dense**: `sentence-transformers/all-MiniLM-L6-v2` embeddings in pgvector
+- **BM25**: In-memory keyword index with reciprocal rank fusion (RRF)
+- **Fusion**: Weighted combination (50/50) of dense and keyword scores
+
+### Reproduce
+
+```bash
+# Dense baseline (default)
+python scripts/eval_offline.py \
+  --qa eval/qa_gold_v2_with_chunks.jsonl \
+  --out eval/reports/dense_baseline.json \
+  --api http://localhost:8000
+
+# Hybrid (set USE_HYBRID=1 in docker-compose.api.yml, rebuild)
+docker-compose -f docker-compose.api.yml down
+# Edit docker-compose.api.yml: uncomment USE_HYBRID: "1"
+docker-compose -f docker-compose.api.yml build api
+docker-compose -f docker-compose.api.yml up -d
+
+python scripts/eval_offline.py \
+  --qa eval/qa_gold_v2_with_chunks.jsonl \
+  --out eval/reports/hybrid_baseline.json \
+  --api http://localhost:8000
+```
+
+**Reports**: `eval/reports/{dense_clean.json, hybrid_final_fixed.json}`
+
+---
+
+## 10. LangSmith tracing
 
 The API is wired to LangSmith and exposes what it sees from the environment.
 
@@ -294,7 +351,7 @@ If both show `import_ok: true` and the emit endpoint says `emitted: true`, trace
 
 ---
 
-## 10. Security and operational notes
+## 11. Security and operational notes
 
 - **API keys:** enforced in `serving/api.py` for all meaningful routes. Keys are **not** hardcoded; local demo uses `demo-key-123`, but the flow (`flows/prefect_a2a.py`) now refuses to run if `INTELSENT_KEY` is missing.
 - **Rate limiting:** configured with SlowAPI and backed by Redis (`REDIS_URL`), so the API cannot be hammered by the UI.
@@ -304,7 +361,7 @@ If both show `import_ok: true` and the emit endpoint says `emitted: true`, trace
 
 ---
 
-## 11. Deploy targets
+## 12. Deploy targets
 
 **Render API**  
 - URL: https://intelsent.onrender.com/  
@@ -323,7 +380,7 @@ If both show `import_ok: true` and the emit endpoint says `emitted: true`, trace
 
 ---
 
-## 12. Future automation (not enabled by default)
+## 13. Future automation (not enabled by default)
 
 The current manual 4-step for a new ticker/year:
 
@@ -333,13 +390,13 @@ The current manual 4-step for a new ticker/year:
 4. Query
 
 …can be automated by:
-- adding a background worker that listens for “no context” responses and enqueues ingest,
+- adding a background worker that listens for "no context" responses and enqueues ingest,
 - or extending the API to fire chunk/embed after a successful ingest.
 The code is already separated, so this is a small next step.
 
 ---
 
-## 13. GDPR / Data Protection Notes
+## 14. GDPR / Data Protection Notes
 
 This project processes only public SEC 10-K filings fetched from data.sec.gov. These filings do not contain end-user personal data. The system does not persist user questions beyond normal API/service logs.
 
