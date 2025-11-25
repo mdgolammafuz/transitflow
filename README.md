@@ -1,12 +1,37 @@
 # IntelSent
 **API (Render):** https://intelsent.onrender.com/  
-**UI (Vercel):** https://intel-sent.vercel.app/
+**UI (Vercel):** https://intel-sent-8ib6crhhd-mdgolammafuzs-projects.vercel.app/
 **Live Demo:** https://intelsent.onrender.com/docs  
 **Source:** https://github.com/mdgolammafuz/IntelSent
 
 SEC 10-K financial document retrieval system with hybrid search (semantic + keyword), demonstrating production-grade data engineering: explicit ETL pipeline, benchmark-driven optimization, and enterprise observability.
 
 **Tech Stack:** FastAPI • pgvector • Redis • Docker • Prefect • LangSmith
+
+---
+## ⚠️ Current Deployment Status
+
+**Free tier constraints:** This demo is deployed on Render's 512MB free tier, which is **insufficient** for embedding model + retrieval pipeline (requires ~550MB RAM minimum).
+
+**What works:**
+- Interactive API docs: https://intelsent.onrender.com/docs
+- MCP tool manifest: `/mcp/tools`
+- Health checks: `/healthz`
+- Full codebase review (this repo)
+- Local deployment (Docker): `docker-compose -f docker-compose.api.yml up`
+
+**What doesn't work (free tier):**
+- Query endpoints (`/query`, `/query_min`) - Returns 503
+- Live UI demo - Backend unavailable
+- MCP tool execution - Requires chain initialization
+
+**For live demo:** Run locally (see Quick Start) or upgrade to 1GB instance ($7/month)
+
+**Production deployment would use:**
+- 1GB+ RAM instance
+- Hybrid retrieval (33% accuracy vs 0% dense-only)
+- Full embedding model
+- Horizontal scaling for concurrent users
 
 ---
 
@@ -460,37 +485,149 @@ pytz.timezone('Europe/Berlin')
 **Metrics:** Prometheus-compatible `/metrics` endpoint  
 **Health checks:** `/healthz` for load balancers  
 
-### Deployment
+---
+## 9. Deployment
 
-**Render (Backend)**
+### Overview
 
-**Free tier limitations (512MB RAM):**
-- Hybrid retrieval causes OOM (Out of Memory) crashes
-- **Workaround:** Set `USE_HYBRID=0` to use dense-only retrieval
-- For production: Upgrade to 1GB instance ($7/month) to enable hybrid
+| Component | Platform | Status | URL |
+|-----------|----------|--------|-----|
+| Backend API | Render (Free) | Limited | https://intelsent.onrender.com/docs |
+| Frontend UI | Vercel | Unavailable | Backend OOM |
+| Database | Neon (Free) | Active | - |
 
-**Environment variables:**
+---
+
+### Backend (Render)
+
+#### Free Tier Constraints
+
+**Memory limit:** 512MB RAM  
+**Issue:** Embedding model + retrieval pipeline requires ~550MB minimum  
+**Current workaround:** `SKIP_CHAIN_INIT=1` (disables query execution)
+
+**What works:**
+- API documentation: `/docs`
+- Health check: `/healthz`
+- MCP tool manifest: `/mcp/tools`
+
+**What doesn't work:**
+- Query execution: `/query`, `/query_min` (503 Service Unavailable)
+- MCP tool execution (requires chain)
+
+#### Environment Variables
 ```yaml
-# Required
+# Render Dashboard → Environment
 API_KEYS: demo-key-123
+SKIP_CHAIN_INIT: "1"              # Required for free tier
+USE_HYBRID: "0"                   # Irrelevant when chain skipped
 LANGCHAIN_TRACING_V2: "true"
 LANGCHAIN_API_KEY: lsv2_xxx
 LANGCHAIN_PROJECT: IntelSent
-
-# Optional (disable for free tier)
-USE_HYBRID: "0"  # Set to "1" on paid tier for better accuracy
 ```
 
-**Performance trade-off:**
-- Dense only: 0% hit@5 (benchmark), but stays within 512MB
-- Hybrid: 32.6% hit@5 (benchmark), requires 1GB+ RAM
+#### Config File
 
-**Vercel (Frontend)**
-```bash
-# Environment variables
+Upload as Secret File: `/etc/secrets/app-config.yaml`
+```yaml
+embedding:
+  model_name: sentence-transformers/paraphrase-MiniLM-L3-v2
+  device: cpu
+retrieval:
+  top_k: 5
+  max_k: 10
+generation:
+  max_context_chars: 4000
+pgvector:
+  enabled: true
+  conn: postgresql://[NEON_DSN]
+  table: chunks
+  text_col: content
+```
+
+---
+
+### Frontend (Vercel)
+
+**Status:** Unavailable (backend OOM)
+
+**Environment Variables:**
+```
 VITE_API_BASE=https://intelsent.onrender.com
-VITE_API_KEY=your-key-here
+VITE_API_KEY=demo-key-123
 ```
+
+**Issue:** CORS configured correctly, but backend crashes under load.
+
+---
+
+### Local Deployment (Full Functionality)
+
+**All features work locally:**
+```bash
+# Start services
+docker-compose -f docker-compose.api.yml up -d
+
+# Verify
+curl http://localhost:8000/healthz
+
+# Interactive docs
+open http://localhost:8000/docs
+```
+
+**What you get locally:**
+- Query execution with embeddings
+- Hybrid retrieval (if `USE_HYBRID=1`)
+- Full MCP tool functionality
+- UI at http://localhost:5173
+
+---
+
+### Production Deployment Requirements
+
+**To deploy with full functionality:**
+
+| Resource | Specification | Cost |
+|----------|---------------|------|
+| Compute | 1GB RAM minimum | $7/mo (Render Starter) |
+| Database | Neon free tier | $0 |
+| Storage | Included | $0 |
+| **Total** | | **$7-10/month** |
+
+**Configuration changes:**
+```yaml
+# Set in Render Environment
+SKIP_CHAIN_INIT: "0"     # Enable chain
+USE_HYBRID: "1"          # Enable hybrid retrieval
+```
+
+**What you'd get:**
+- All endpoints functional
+- Hybrid retrieval (33% hit@5 vs 0% dense)
+- Concurrent user support
+- Stable uptime (no OOM crashes)
+
+**Current trade-off:** Saving $84/year by documenting limitations instead of paying for hosting.
+
+---
+
+### Alternative: Self-Hosting
+
+**Hetzner VPS (CPX11):**
+- 2GB RAM, 40GB disk
+- €4.51/month (~$5/month)
+- Full control, no vendor lock-in
+
+**Setup:**
+```bash
+# Deploy with Docker Compose
+git clone https://github.com/your-username/IntelSent
+cd IntelSent
+docker-compose -f docker-compose.api.yml up -d
+```
+
+Cheaper than managed hosting, requires more DevOps.
+---
 
 ### Data Privacy (GDPR Notes)
 
