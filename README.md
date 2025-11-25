@@ -81,6 +81,7 @@ SEC 10-K financial document retrieval system with hybrid search (semantic + keyw
 
 ### System Overview
 
+<!-- mermaid diagram -->
 ```mermaid
 flowchart TB
     subgraph Sources
