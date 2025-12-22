@@ -12,7 +12,7 @@ from datetime import datetime, date
 from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 import logging
-
+from datetime import datetime, date, timezone  # <--- Added timezone
 logger = logging.getLogger(__name__)
 
 
@@ -150,7 +150,8 @@ class WeatherClient:
             response = await self.client.get(self.FORECAST_URL, params=params)
             response.raise_for_status()
             data = response.json()
-            return self._parse_forecast_response(data, datetime.utcnow())
+            # Use timezone-aware UTC time
+            return self._parse_forecast_response(data, datetime.now(timezone.utc))
         except httpx.HTTPError as e:
             logger.error(f"Failed to fetch forecast: {e}")
             raise
