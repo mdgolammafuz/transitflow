@@ -9,7 +9,7 @@ API Documentation: https://discomap.eea.europa.eu/map/fme/AirQualityExport.htm
 import httpx
 from datetime import datetime, date
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,8 +28,8 @@ class PM25Measurement(BaseModel):
     value_ugm3: float = Field(..., ge=0, le=1000, description="PM2.5 in µg/m³")
     is_valid: bool = Field(default=True, description="Data quality flag")
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "station_id": "STA.DE.DEBB021",
                 "station_name": "Berlin Neukölln",
@@ -38,6 +38,7 @@ class PM25Measurement(BaseModel):
                 "is_valid": True
             }
         }
+    )
 
 
 class StationInfo(BaseModel):
@@ -61,18 +62,6 @@ class EEAClient:
     Client for EEA Air Quality API.
     
     Fetches PM2.5 data for Berlin stations from the European Environment Agency.
-    
-    Usage:
-        client = EEAClient()
-        
-        # Get Berlin stations
-        stations = await client.get_berlin_stations()
-        
-        # Get recent measurements
-        measurements = await client.get_pm25_measurements(
-            start_date=date(2024, 12, 1),
-            end_date=date(2024, 12, 20)
-        )
     """
     
     # EEA API endpoints
@@ -121,10 +110,6 @@ class EEAClient:
         Returns:
             List of StationInfo objects for Berlin stations.
         """
-        # EEA station metadata endpoint
-        # Note: This is a simplified approach. In production, you'd query
-        # the full station metadata API.
-        
         params = {
             "CountryCode": self.COUNTRY_CODE,
             "Pollutant": "6001",  # PM2.5 pollutant code
@@ -158,14 +143,6 @@ class EEAClient:
     ) -> list[PM25Measurement]:
         """
         Fetch PM2.5 measurements for Berlin stations.
-        
-        Args:
-            start_date: Start date for data retrieval
-            end_date: End date for data retrieval
-            station_ids: Optional list of specific station IDs to fetch
-            
-        Returns:
-            List of PM25Measurement objects
         """
         params = {
             "CountryCode": self.COUNTRY_CODE,
@@ -278,91 +255,3 @@ class EEAClient:
                 continue
         
         return measurements
-
-
-# =============================================================================
-# Alternative: Direct CSV Download
-# =============================================================================
-
-class EEABulkClient:
-    """
-    Alternative client that downloads bulk CSV files from EEA.
-    
-    More reliable for historical data. Uses the download portal.
-    
-    URL Pattern:
-    https://eeadmz1-downloads-api-appservice.azurewebsites.net/ParquetFile/
-    """
-    
-    DOWNLOAD_BASE = "https://eeadmz1-downloads-api-appservice.azurewebsites.net"
-    
-    def __init__(self, timeout: float = 60.0):
-        self.timeout = timeout
-        self._client: Optional[httpx.AsyncClient] = None
-    
-    async def __aenter__(self):
-        self._client = httpx.AsyncClient(timeout=self.timeout)
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._client:
-            await self._client.aclose()
-    
-    @property
-    def client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
-        return self._client
-    
-    async def download_pm25_data(
-        self,
-        year: int,
-        country: str = "DE"
-    ) -> bytes:
-        """
-        Download PM2.5 data for a specific year.
-        
-        Args:
-            year: Year to download
-            country: Country code (default: DE for Germany)
-            
-        Returns:
-            Raw parquet/CSV bytes
-        """
-        # Construct download URL
-        url = f"{self.DOWNLOAD_BASE}/ParquetFile/PM2.5/{country}/{year}"
-        
-        try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-            return response.content
-        except httpx.HTTPError as e:
-            logger.error(f"Failed to download bulk data: {e}")
-            raise
-
-
-# =============================================================================
-# Sync Wrapper (for non-async usage)
-# =============================================================================
-
-def get_berlin_pm25_sync(
-    start_date: date,
-    end_date: date
-) -> list[PM25Measurement]:
-    """
-    Synchronous wrapper to fetch Berlin PM2.5 data.
-    
-    Usage:
-        from datetime import date
-        measurements = get_berlin_pm25_sync(
-            start_date=date(2024, 12, 1),
-            end_date=date(2024, 12, 20)
-        )
-    """
-    import asyncio
-    
-    async def _fetch():
-        async with EEAClient() as client:
-            return await client.get_pm25_measurements(start_date, end_date)
-    
-    return asyncio.run(_fetch())

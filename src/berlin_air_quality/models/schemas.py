@@ -1,3 +1,4 @@
+
 """
 Core data schemas for Berlin Air Quality Predictor.
 
@@ -7,7 +8,7 @@ Defines the prediction target and feature schemas.
 from enum import Enum
 from datetime import date as date_type
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class PM25Category(str, Enum):
@@ -93,8 +94,9 @@ class DailyFeatures(BaseModel):
         description="Actual next-day category (training only)"
     )
     
-    class Config:
-        json_schema_extra = {
+    # Configuration (Pydantic V2 style)
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "target_date": "2024-12-20",
                 "feature_version": "v1",
@@ -109,6 +111,7 @@ class DailyFeatures(BaseModel):
                 "tomorrow_pm25_category": "Moderate"
             }
         }
+    )
     
     def to_feature_vector(self) -> list[float]:
         """
@@ -153,8 +156,9 @@ class Prediction(BaseModel):
     reason: str = Field(..., description="Human-readable explanation")
     model_version: str = Field(..., description="Model version used")
     
-    class Config:
-        json_schema_extra = {
+    # Configuration (Pydantic V2 style)
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "target_date": "2024-12-21",
                 "category": "Moderate",
@@ -168,3 +172,5 @@ class Prediction(BaseModel):
                 "model_version": "1.0.0"
             }
         }
+    )
+    
