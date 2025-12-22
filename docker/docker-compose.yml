@@ -1,0 +1,69 @@
+# Docker Compose for Berlin Air Quality
+# Redpanda (Kafka-compatible) + Schema Registry
+#
+# Start: docker-compose up -d
+# Stop:  docker-compose down
+# Logs:  docker-compose logs -f redpanda
+
+version: '3.8'
+
+services:
+  # ============================================
+  # REDPANDA (Kafka-compatible, lightweight)
+  # ============================================
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.5
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=localhost:8082
+      - --schema-registry-addr=0.0.0.0:8081
+      - --advertise-schema-registry-addr=localhost:8081
+    ports:
+      - "9092:9092"   # Kafka API
+      - "8081:8081"   # Schema Registry
+      - "8082:8082"   # REST Proxy
+      - "9644:9644"   # Admin API
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - airquality
+
+  # ============================================
+  # REDPANDA CONSOLE (Web UI)
+  # ============================================
+  console:
+    image: docker.redpanda.com/redpandadata/console:v2.4.3
+    container_name: redpanda-console
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - KAFKA_SCHEMAREGISTRY_ENABLED=true
+      - KAFKA_SCHEMAREGISTRY_URLS=http://redpanda:8081
+    networks:
+      - airquality
+
+volumes:
+  redpanda_data:
+
+networks:
+  airquality:
+    driver: bridge

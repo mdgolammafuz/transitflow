@@ -1,0 +1,47 @@
+{
+  "type": "record",
+  "name": "DeadLetterRecord",
+  "namespace": "com.airquality.berlin",
+  "doc": "Failed record sent to dead letter queue for investigation",
+  "fields": [
+    {
+      "name": "original_topic",
+      "type": "string",
+      "doc": "Topic the record was originally destined for"
+    },
+    {
+      "name": "error_type",
+      "type": "string",
+      "doc": "Type of error (validation, serialization, etc.)"
+    },
+    {
+      "name": "error_message",
+      "type": "string",
+      "doc": "Detailed error message"
+    },
+    {
+      "name": "raw_payload",
+      "type": "string",
+      "doc": "Original payload as JSON string"
+    },
+    {
+      "name": "source",
+      "type": "string",
+      "doc": "Data source (eea, open-meteo)"
+    },
+    {
+      "name": "failed_at",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "Timestamp when the failure occurred"
+    },
+    {
+      "name": "retry_count",
+      "type": "int",
+      "default": 0,
+      "doc": "Number of retry attempts"
+    }
+  ]
+}
