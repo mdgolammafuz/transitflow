@@ -1,6 +1,9 @@
-version: '3.8'
+# version: '3.8'
 
 services:
+  # ============================================
+  # REDPANDA (Kafka-compatible, lightweight)
+  # ============================================
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v23.3.5
     container_name: redpanda
@@ -21,7 +24,7 @@ services:
       - --pandaproxy-addr=0.0.0.0:8082
     ports:
       - "9092:9092"
-      - "8081:8081"
+      - "8081:8081"   # Standard Port
       - "8082:8082"
       - "9644:9644"
     volumes:
@@ -34,6 +37,9 @@ services:
     networks:
       - airquality
 
+  # ============================================
+  # REDPANDA CONSOLE (Web UI)
+  # ============================================
   console:
     image: docker.redpanda.com/redpandadata/console:v2.4.3
     container_name: redpanda-console
@@ -49,8 +55,33 @@ services:
     networks:
       - airquality
 
+  # ============================================
+  # POSTGRESQL (Bronze/Silver/Gold storage)
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: airquality
+      POSTGRES_USER: airquality
+      POSTGRES_PASSWORD: airquality
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Maps local sql/ directory to auto-init scripts
+      - ../sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airquality"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - airquality
+
 volumes:
   redpanda_data:
+  postgres_data:
 
 networks:
   airquality:
