@@ -1,7 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 *.so
 .Python
 build/
@@ -35,11 +35,14 @@ ENV/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# Data (keep structure, ignore content)
+# Data (Expanded for Phase 3 Lakehouse)
+# We ignore the Lakehouse content but keep the folder structure if needed
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+data/lakehouse/
+data/checkpoints/
 
 # Logs
 *.log
@@ -67,3 +70,9 @@ mlruns/
 # Secrets
 *.pem
 *.key
+
+# Spark & Flink (Phase 3)
+metastore_db/
+derby.log
+target/
+*.jar
