@@ -1,7 +1,4 @@
 services:
-  # ============================================
-  # REDPANDA (Dual Listeners for Host & Docker)
-  # ============================================
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v23.3.5
     container_name: redpanda
@@ -13,34 +10,24 @@ services:
       - --reserve-memory=0M
       - --overprovisioned
       - --node-id=0
-    environment:
-      # Use environment variables to avoid CLI parsing errors
-      # INTERNAL (29092) for Docker Console, EXTERNAL (9092) for your Mac
-      - RPK_RED_PANDA_KAFKA_API=INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
-      - RPK_RED_PANDA_ADVERTISE_KAFKA_API=INTERNAL://redpanda:29092,EXTERNAL://localhost:9092
-      # Maps listeners to Plaintext security
-      - RPK_RED_PANDA_KAFKA_HANDLERS_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-      - RPK_RED_PANDA_SCHEMA_REGISTRY_API=0.0.0.0:8081
-      - RPK_RED_PANDA_PANDAPROXY_API=0.0.0.0:8082
-      - RPK_RED_PANDA_ADVERTISE_PANDAPROXY_API=localhost:8082
+      # Simplified networking: bind to all interfaces
+      - --kafka-addr=0.0.0.0:9092
+      - --advertise-kafka-addr=localhost:9092
+      - --schema-registry-addr=0.0.0.0:8081
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
     ports:
-      - "9092:9092"   # External Access (Mac)
-      - "8081:8081"   # Schema Registry
-      - "8082:8082"   # Proxy
-      - "9644:9644"   # Admin API
-    volumes:
-      - redpanda_data:/var/lib/redpanda/data
+      - "9092:9092"
+      - "8081:8081"
+    # Re-adding healthcheck so console can start
     healthcheck:
       test: ["CMD", "rpk", "cluster", "health"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
     networks:
       - airquality
 
-  # ============================================
-  # REDPANDA CONSOLE (Web UI)
-  # ============================================
   console:
     image: docker.redpanda.com/redpandadata/console:v2.4.3
     container_name: redpanda-console
@@ -50,16 +37,11 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Uses the INTERNAL listener on port 29092
-      - KAFKA_BROKERS=redpanda:29092
-      - KAFKA_SCHEMAREGISTRY_ENABLED=true
-      - KAFKA_SCHEMAREGISTRY_URLS=http://redpanda:8081
+      # Console talks to Redpanda via Docker network
+      - KAFKA_BROKERS=redpanda:9092
     networks:
       - airquality
 
-  # ============================================
-  # POSTGRESQL (Bronze/Silver/Gold storage)
-  # ============================================
   postgres:
     image: postgres:16-alpine
     container_name: postgres
@@ -69,20 +51,8 @@ services:
       POSTGRES_PASSWORD: airquality
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ../sql:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U airquality"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     networks:
       - airquality
-
-volumes:
-  redpanda_data:
-  postgres_data:
 
 networks:
   airquality:
