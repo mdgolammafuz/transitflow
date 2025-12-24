@@ -1,8 +1,6 @@
-# version: '3.8'
-
 services:
   # ============================================
-  # REDPANDA (Kafka-compatible, lightweight)
+  # REDPANDA (Dual Listeners for Host & Docker)
   # ============================================
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v23.3.5
@@ -15,18 +13,21 @@ services:
       - --reserve-memory=0M
       - --overprovisioned
       - --node-id=0
-      # KAFKA (Needs advertise)
-      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr=PLAINTEXT://localhost:9092
-      # SCHEMA REGISTRY (Standard HTTP - No advertise needed)
-      - --schema-registry-addr=0.0.0.0:8081
-      # PANDAPROXY
-      - --pandaproxy-addr=0.0.0.0:8082
+    environment:
+      # Use environment variables to avoid CLI parsing errors
+      # INTERNAL (29092) for Docker Console, EXTERNAL (9092) for your Mac
+      - RPK_RED_PANDA_KAFKA_API=INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      - RPK_RED_PANDA_ADVERTISE_KAFKA_API=INTERNAL://redpanda:29092,EXTERNAL://localhost:9092
+      # Maps listeners to Plaintext security
+      - RPK_RED_PANDA_KAFKA_HANDLERS_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - RPK_RED_PANDA_SCHEMA_REGISTRY_API=0.0.0.0:8081
+      - RPK_RED_PANDA_PANDAPROXY_API=0.0.0.0:8082
+      - RPK_RED_PANDA_ADVERTISE_PANDAPROXY_API=localhost:8082
     ports:
-      - "9092:9092"
-      - "8081:8081"   # Standard Port
-      - "8082:8082"
-      - "9644:9644"
+      - "9092:9092"   # External Access (Mac)
+      - "8081:8081"   # Schema Registry
+      - "8082:8082"   # Proxy
+      - "9644:9644"   # Admin API
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -49,7 +50,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - KAFKA_BROKERS=redpanda:9092
+      # Uses the INTERNAL listener on port 29092
+      - KAFKA_BROKERS=redpanda:29092
       - KAFKA_SCHEMAREGISTRY_ENABLED=true
       - KAFKA_SCHEMAREGISTRY_URLS=http://redpanda:8081
     networks:
@@ -69,7 +71,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Maps local sql/ directory to auto-init scripts
       - ../sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U airquality"]
