@@ -103,8 +103,12 @@ class TelemetryProducer:
         except Exception:
             logger.exception("Failed to write to DLQ")
 
+    def flush(self, timeout: float = 10.0) -> int:
+        """Flush pending messages."""
+        return self._producer.flush(timeout=timeout)
+
     def close(self):
         """Flush pending messages and close producer."""
-        leftover = self._producer.flush(timeout=10.0)
+        leftover = self.flush(timeout=10.0)
         if leftover > 0:
             logger.warning("Producer closed with %d unconfirmed messages", leftover)

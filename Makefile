@@ -40,7 +40,7 @@ test:
 	PYTHONPATH=. pytest tests/unit/ -v
 
 verify:
-	python scripts/verify_ingestion.py --full
+	PYTHONPATH=. python scripts/verify_ingestion.py --full
 
 run:
 	python scripts/run_bridge.py --line 600
