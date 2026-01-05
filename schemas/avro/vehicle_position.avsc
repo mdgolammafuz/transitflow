@@ -1,0 +1,32 @@
+{
+  "type": "record",
+  "name": "VehiclePosition",
+  "namespace": "fi.hsl.transit",
+  "doc": "Real-time vehicle position from HSL telemetry",
+  "fields": [
+    { "name": "vehicle_id", "type": "int", "doc": "Unique vehicle identifier" },
+    {
+      "name": "timestamp",
+      "type": { "type": "long", "logicalType": "timestamp-millis" },
+      "doc": "Event timestamp in milliseconds"
+    },
+    { "name": "latitude", "type": "double", "doc": "WGS84 latitude" },
+    { "name": "longitude", "type": "double", "doc": "WGS84 longitude" },
+    { "name": "speed_ms", "type": "double", "doc": "Speed in meters per second" },
+    { "name": "heading", "type": "int", "doc": "Heading in degrees (0-360)" },
+    { "name": "delay_seconds", "type": "int", "doc": "Schedule deviation in seconds" },
+    { "name": "door_status", "type": "boolean", "doc": "True if open, False if closed" },
+    {
+      "name": "odometer",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "Odometer reading in meters"
+    },
+    { "name": "next_stop_id", "type": ["null", "int"], "default": null },
+    { "name": "route_id", "type": ["null", "string"], "default": null },
+    { "name": "line_id", "type": "string", "doc": "Line number" },
+    { "name": "direction_id", "type": "int", "doc": "Direction (1 or 2)" },
+    { "name": "operator_id", "type": "int", "doc": "Operator identifier" },
+    { "name": "journey_start", "type": ["null", "string"], "default": null }
+  ]
+}
