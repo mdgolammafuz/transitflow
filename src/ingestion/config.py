@@ -41,12 +41,21 @@ class KafkaConfig(BaseSettings):
     schema_registry_url: str = Field(default="http://localhost:8081")
 
 
+class MetricsConfig(BaseSettings):
+    """Prometheus metrics configuration."""
+    model_config = SettingsConfigDict(env_prefix="METRICS_")
+
+    enabled: bool = Field(default=True)
+    port: int = Field(default=8000)
+
+
 class Settings(BaseSettings):
     """Root settings."""
     model_config = SettingsConfigDict(env_prefix="APP_")
 
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     kafka: KafkaConfig = Field(default_factory=KafkaConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     
     # Feature Flags / Filters
     filter_line: str = Field(default="") # Empty = all lines
