@@ -1,0 +1,38 @@
+{
+  "type": "record",
+  "name": "InvalidEvent",
+  "namespace": "fi.hsl.transit",
+  "doc": "Invalid event sent to dead letter queue",
+  "fields": [
+    {
+      "name": "raw_payload",
+      "type": "string",
+      "doc": "Original JSON payload (truncated if large)"
+    },
+    {
+      "name": "error_message",
+      "type": "string",
+      "doc": "Validation error description"
+    },
+    {
+      "name": "error_field",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Field that caused the error"
+    },
+    {
+      "name": "received_at",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "When the invalid message was received"
+    },
+    {
+      "name": "topic",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Source MQTT topic"
+    }
+  ]
+}
