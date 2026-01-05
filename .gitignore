@@ -71,3 +71,8 @@ temp/
 
 # Kubernetes secrets
 *-secrets.yaml
+
+# Flink / Maven
+flink/target/
+flink/dependency-reduced-pom.xml
+infra/local/flink-jobs/*.jar
