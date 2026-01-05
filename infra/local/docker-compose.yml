@@ -1,5 +1,3 @@
-# Local development infrastructure
-# Redpanda (Kafka-compatible), Schema Registry, PostgreSQL, Redis
 
 version: '3.8'
 
@@ -15,13 +13,16 @@ services:
       - --reserve-memory 0M
       - --overprovisioned
       - --node-id 0
-      - --kafka-addr PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://localhost:9092
+      # Listeners: Internal (Docker), External (Host/Localhost)
+      - --kafka-addr INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      - --advertise-kafka-addr INTERNAL://redpanda:29092,EXTERNAL://localhost:9092
       - --schema-registry-addr 0.0.0.0:8081
     ports:
       - "9092:9092"
       - "8081:8081"
       - "9644:9644"
+    networks:
+      - transit-net
     healthcheck:
       test: ["CMD", "rpk", "cluster", "health"]
       interval: 10s
@@ -36,12 +37,13 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
+    networks:
+      - transit-net
     environment:
-      KAFKA_BROKERS: redpanda:9092
+      # Connects via the INTERNAL listener
+      KAFKA_BROKERS: redpanda:29092
       SCHEMA_REGISTRY_ENABLED: "true"
       SCHEMA_REGISTRY_URLS: http://redpanda:8081
-    # Console runs internally, no extra auth needed for local dev 
-    # as it's just a view layer. In prod, we'd put this behind an OAuth proxy.
 
   postgres:
     image: postgres:16-alpine
@@ -55,6 +57,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - transit-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
@@ -67,6 +71,8 @@ services:
     command: redis-server --requirepass ${REDIS_PASSWORD}
     ports:
       - "6379:6379"
+    networks:
+      - transit-net
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -84,6 +90,8 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
+    networks:
+      - transit-net
 
   grafana:
     image: grafana/grafana:10.2.2
@@ -96,7 +104,13 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false" 
     volumes:
       - grafana_data:/var/lib/grafana
+    networks:
+      - transit-net
 
 volumes:
   postgres_data:
   grafana_data:
+
+networks:
+  transit-net:
+    driver: bridge
