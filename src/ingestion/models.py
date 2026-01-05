@@ -3,7 +3,7 @@ Data models for HSL vehicle telemetry.
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,10 +25,9 @@ class VehiclePosition(BaseModel):
     heading: int = Field(ge=0, le=360, description="Heading in degrees")
     delay_seconds: int = Field(description="Schedule deviation in seconds")
     
-    # FIXED: Changed to bool to match Avro schema recommendation
-    door_status: bool = Field(description="True=open, False=closed")
+    # True=open, False=closed
+    door_status: bool = Field(description="Door status")
     
-    # FIXED: Python int handles large numbers, maps to Avro long
     odometer: Optional[int] = Field(default=None, description="Distance in meters")
     
     next_stop_id: Optional[int] = Field(default=None)
@@ -38,13 +37,20 @@ class VehiclePosition(BaseModel):
     operator_id: int = Field(description="Operator identifier")
     journey_start: Optional[str] = Field(default=None)
 
+    # RESTORED: Computed field required by Flink/Tests
+    event_time_ms: int = Field(default=0, description="Unix timestamp in milliseconds")
+
     @field_validator("timestamp", mode="before")
     @classmethod
     def parse_timestamp(cls, v):
         if isinstance(v, str):
-            # Handle Z suffix for ISO 8601
             return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
+    def model_post_init(self, __context: Any):
+        """Compute event_time_ms after validation."""
+        if self.timestamp:
+            self.event_time_ms = int(self.timestamp.timestamp() * 1000)
 
 
 class RawHSLPayload(BaseModel):
@@ -83,7 +89,6 @@ class RawHSLPayload(BaseModel):
             speed_ms=self.spd or 0.0,
             heading=self.hdg or 0,
             delay_seconds=self.dl or 0,
-            # Conversion int(0/1) -> bool
             door_status=bool(self.drst),
             odometer=self.odo,
             next_stop_id=self.stop,

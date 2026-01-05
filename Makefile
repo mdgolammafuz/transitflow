@@ -37,7 +37,7 @@ topics:
 	docker exec redpanda /tmp/topics.sh
 
 test:
-	pytest tests/unit/ -v
+	PYTHONPATH=. pytest tests/unit/ -v
 
 verify:
 	python scripts/verify_ingestion.py --full
