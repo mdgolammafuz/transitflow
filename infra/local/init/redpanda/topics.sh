@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 
 # ==========================================
-# Fleet Telemetry Topic Setup
+# Fleet Telemetry Topic Setup (Local Dev)
 # ==========================================
 
 set -e
 
-# Default to localhost, but allow override via env var
+# Default to localhost
 REDPANDA_HOST="${REDPANDA_HOST:-localhost:9092}"
-REPLICATION_FACTOR="${REPLICATION_FACTOR:-3}"     # Default to 3 for high availability
-MIN_INSYNC_REPLICAS="${MIN_INSYNC_REPLICAS:-2}"   # Ensure data is written to at least 2 brokers
+
+# FIXED: Default to 1 for local development (single broker)
+REPLICATION_FACTOR="${REPLICATION_FACTOR:-1}"
+MIN_INSYNC_REPLICAS="${MIN_INSYNC_REPLICAS:-1}"
 
 # --- Time Constants (ms) ---
 ONE_HOUR=$((60 * 60 * 1000))
@@ -21,16 +23,15 @@ echo "Configuring Kafka topics on $REDPANDA_HOST..."
 echo "Replication Factor: $REPLICATION_FACTOR"
 echo "Min Insync Replicas: $MIN_INSYNC_REPLICAS"
 
-# Function to safely create topics (DRY Principle)
+# Function to safely create topics
 create_topic() {
     local topic_name=$1
     local partitions=$2
     local retention_ms=$3
-    local compression=$4 # Optional argument
+    local compression=$4 
 
     echo "Ensuring topic: $topic_name"
 
-    # Construct the base command
     cmd="rpk topic create $topic_name \
         --brokers \"$REDPANDA_HOST\" \
         --partitions $partitions \
@@ -38,33 +39,27 @@ create_topic() {
         --config retention.ms=$retention_ms \
         --config min.insync.replicas=$MIN_INSYNC_REPLICAS"
 
-    # Append compression if specified
     if [ -n "$compression" ]; then
         cmd="$cmd --config compression.type=$compression"
     fi
 
-    # Execute. 
-    # We suppress standard error (2>/dev/null) to hide "topic exists" errors,
-    # but we allow the script to continue (|| true) to maintain idempotency.
-    # A failure to create due to connection issues will still be caught if we remove the silence,
-    # For stricter environments, check `rpk topic list` first.
+    # Suppress error if topic exists
     eval "$cmd" 2>/dev/null || echo "  - Topic $topic_name likely exists (skipping)."
 }
 
 # --- Main Telemetry Topics ---
 
-# Raw Telemetry: High throughput, short retention, ZSTD compression for cost/performance
+# Raw Telemetry
 create_topic "fleet.telemetry.raw" 8 $ONE_HOUR "zstd"
 create_topic "fleet.telemetry.dlq" 1 $ONE_WEEK
 
-# Enriched Events: Processed data
+# Enriched Events
 create_topic "fleet.enriched" 8 $ONE_DAY
 create_topic "fleet.enriched.dlq" 1 $ONE_WEEK
 
 # --- Critical Events ---
 
-# Stop Events: Critical state changes.
-# SECURITY NOTE: Includes DLQ to prevent blocking the queue on poison pills.
+# Stop Events
 create_topic "fleet.stop_events" 8 $ONE_WEEK
 create_topic "fleet.stop_events.dlq" 1 $ONE_MONTH
 
@@ -74,10 +69,10 @@ create_topic "fleet.stop_events.dlq" 1 $ONE_MONTH
 create_topic "fleet.predictions" 8 $ONE_WEEK
 create_topic "fleet.predictions.dlq" 1 $ONE_MONTH
 
-# Anomalies: Longer retention for investigation
+# Anomalies
 create_topic "fleet.anomalies" 4 $ONE_MONTH
 
-# Metrics: Standard operational metrics
+# Metrics
 create_topic "fleet.metrics" 4 $ONE_WEEK
 
 echo "----------------------------------------"
