@@ -33,7 +33,7 @@ public class EnrichedEvent {
     private int delaySeconds;
 
     @JsonProperty("door_status")
-    private int doorStatus;
+    private boolean doorStatus;
 
     @JsonProperty("line_id")
     private String lineId;
@@ -71,7 +71,6 @@ public class EnrichedEvent {
 
     public EnrichedEvent() {}
 
-    // Builder pattern for cleaner construction
     public static Builder builder() {
         return new Builder();
     }
@@ -88,7 +87,7 @@ public class EnrichedEvent {
             event.speedMs = pos.getSpeedMs();
             event.heading = pos.getHeading();
             event.delaySeconds = pos.getDelaySeconds();
-            event.doorStatus = pos.getDoorStatus();
+            event.doorStatus = pos.isDoorOpen();
             event.lineId = pos.getLineId();
             event.directionId = pos.getDirectionId();
             event.operatorId = pos.getOperatorId();
@@ -116,7 +115,7 @@ public class EnrichedEvent {
     public double getSpeedMs() { return speedMs; }
     public int getHeading() { return heading; }
     public int getDelaySeconds() { return delaySeconds; }
-    public int getDoorStatus() { return doorStatus; }
+    public boolean isDoorOpen() { return doorStatus; }
     public String getLineId() { return lineId; }
     public int getDirectionId() { return directionId; }
     public int getOperatorId() { return operatorId; }

@@ -1,0 +1,27 @@
+{
+  "type": "record",
+  "name": "EnrichedEvent",
+  "namespace": "fi.transitflow",
+  "doc": "Vehicle position enriched with computed features",
+  "fields": [
+    {"name": "vehicle_id", "type": "int"},
+    {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "latitude", "type": "double"},
+    {"name": "longitude", "type": "double"},
+    {"name": "speed_ms", "type": "double"},
+    {"name": "heading", "type": "int"},
+    {"name": "delay_seconds", "type": "int"},
+    {"name": "door_status", "type": "int"},
+    {"name": "line_id", "type": "string"},
+    {"name": "direction_id", "type": "int"},
+    {"name": "operator_id", "type": "int"},
+    {"name": "next_stop_id", "type": ["null", "int"], "default": null},
+    {"name": "delay_trend", "type": "double", "doc": "Change in delay vs recent average"},
+    {"name": "speed_trend", "type": "double", "doc": "Change in speed vs last event"},
+    {"name": "distance_since_last_m", "type": "double", "doc": "Distance moved since last event"},
+    {"name": "time_since_last_ms", "type": "long", "doc": "Time since last event"},
+    {"name": "is_stopped", "type": "boolean", "doc": "Vehicle speed below threshold"},
+    {"name": "stopped_duration_ms", "type": "long", "doc": "How long vehicle has been stopped"},
+    {"name": "processing_time", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+  ]
+}
