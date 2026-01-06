@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "StopArrival",
+  "namespace": "fi.transitflow",
+  "doc": "Stop arrival event - used as ML training label",
+  "fields": [
+    {"name": "vehicle_id", "type": "int"},
+    {"name": "stop_id", "type": "int"},
+    {"name": "line_id", "type": "string"},
+    {"name": "direction_id", "type": "int"},
+    {"name": "arrival_time", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "delay_at_arrival", "type": "int", "doc": "Delay in seconds when arriving at stop"},
+    {"name": "scheduled_time", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null},
+    {"name": "dwell_time_ms", "type": ["null", "long"], "default": null, "doc": "Time spent at stop (filled on departure)"},
+    {"name": "door_opened", "type": "boolean", "doc": "Whether doors were opened at this stop"},
+    {"name": "latitude", "type": "double"},
+    {"name": "longitude", "type": "double"}
+  ]
+}
