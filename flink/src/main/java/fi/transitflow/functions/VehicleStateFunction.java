@@ -17,21 +17,11 @@ import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Stateful processor for vehicle positions.
- * 
- * For each vehicle:
- * - Maintains state (position, delay history, stop tracking)
- * - Computes real-time features
- * - Detects stop arrivals (ML labels)
- * - Emits enriched events
- */
 public class VehicleStateFunction 
         extends KeyedProcessFunction<Integer, VehiclePosition, EnrichedEvent> {
 
     private static final Logger LOG = LoggerFactory.getLogger(VehicleStateFunction.class);
 
-    // Side output for stop arrivals
     public static final OutputTag<StopArrival> STOP_ARRIVAL_TAG = 
             new OutputTag<StopArrival>("stop-arrivals") {};
 
@@ -43,13 +33,8 @@ public class VehicleStateFunction
         this.stoppedSpeedThreshold = ConfigLoader.stoppedSpeedThreshold();
     }
 
-    public VehicleStateFunction(double stoppedSpeedThreshold) {
-        this.stoppedSpeedThreshold = stoppedSpeedThreshold;
-    }
-
     @Override
     public void open(Configuration parameters) {
-        // Configure state with TTL to clean up inactive vehicles
         StateTtlConfig ttlConfig = StateTtlConfig.newBuilder(
                         Time.minutes(ConfigLoader.stateTtlMinutes()))
                 .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
@@ -69,16 +54,13 @@ public class VehicleStateFunction
             Context ctx,
             Collector<EnrichedEvent> out) throws Exception {
 
-        // Get or create state
         VehicleState state = vehicleState.value();
         if (state == null) {
             state = new VehicleState(ConfigLoader.delayHistorySize());
         }
 
-        // Determine if vehicle is stopped
         boolean isStopped = pos.getSpeedMs() < stoppedSpeedThreshold;
 
-        // Calculate features
         double delayTrend = state.getDelayTrend(pos.getDelaySeconds());
         double speedTrend = state.isFirstEvent() ? 0.0 : state.getSpeedTrend(pos.getSpeedMs());
 
@@ -94,7 +76,7 @@ public class VehicleStateFunction
 
         long stoppedDurationMs = state.getStoppedDurationMs(pos.getEventTimeMs());
 
-        // Detect stop arrival
+        // Detect stop arrival logic - Consistent with boolean door status
         if (state.hasStopChanged(pos.getNextStopId()) && pos.getNextStopId() != null) {
             StopArrival arrival = new StopArrival(
                     pos.getVehicleId(),
@@ -103,19 +85,16 @@ public class VehicleStateFunction
                     pos.getDirectionId(),
                     pos.getEventTimeMs(),
                     pos.getDelaySeconds(),
-                    pos.isDoorOpen(),
+                    pos.isDoorOpen(), // Boolean from VehiclePosition
                     pos.getLatitude(),
                     pos.getLongitude()
             );
             ctx.output(STOP_ARRIVAL_TAG, arrival);
-            LOG.debug("Stop arrival: {}", arrival);
         }
 
-        // Update state
         state.update(pos, isStopped);
         vehicleState.update(state);
 
-        // Build and emit enriched event
         EnrichedEvent enriched = EnrichedEvent.builder()
                 .fromPosition(pos)
                 .delayTrend(delayTrend)
