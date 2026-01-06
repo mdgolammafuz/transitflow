@@ -1,13 +1,18 @@
 # Shared Application Environment via YAML Anchor
 x-app-env: &app-env
   KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
+  # Provide both the full URL and the separate components for flexibility
   POSTGRES_URL: "jdbc:postgresql://postgres:5432/${POSTGRES_DB}"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "${POSTGRES_DB}"
   POSTGRES_USER: "${POSTGRES_USER}"
   POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
   REDIS_HOST: "redis"
   REDIS_PORT: "6379"
   REDIS_PASSWORD: "${REDIS_PASSWORD}"
-
+  # Ensure Python bridge knows where to send
+  METRICS_PORT: "8000"
 services:
   # --- Message Broker ---
   redpanda:
