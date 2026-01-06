@@ -12,6 +12,10 @@ scrape_configs:
     static_configs:
       - targets: ['redpanda:9644']
 
+  - job_name: 'flink'
+    static_configs:
+      - targets: ['flink-jobmanager:8081']
+
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
