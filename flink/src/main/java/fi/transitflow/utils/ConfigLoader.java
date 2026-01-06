@@ -4,13 +4,13 @@ import java.util.Optional;
 
 /**
  * Configuration loader from environment variables.
- * Single source of truth for all config - no hardcoded values.
+ * Production-grade: No hardcoded secrets, fails fast on missing required keys.
  */
 public final class ConfigLoader {
 
     private ConfigLoader() {}
 
-    // Kafka settings
+    // --- Kafka Settings ---
     public static String kafkaBootstrapServers() {
         return getRequired("KAFKA_BOOTSTRAP_SERVERS");
     }
@@ -31,22 +31,26 @@ public final class ConfigLoader {
         return getOrDefault("KAFKA_OUTPUT_TOPIC_STOPS", "fleet.stop_events");
     }
 
-    // Redis settings
+    // --- Redis Settings ---
     public static String redisHost() {
-        return getOrDefault("REDIS_HOST", "localhost");
+        return getOrDefault("REDIS_HOST", "redis");
     }
 
     public static int redisPort() {
         return Integer.parseInt(getOrDefault("REDIS_PORT", "6379"));
     }
 
+    public static String redisPassword() {
+        return getRequired("REDIS_PASSWORD");
+    }
+
     public static String redisKeyPrefix() {
         return getOrDefault("REDIS_KEY_PREFIX", "features:vehicle:");
     }
 
-    // PostgreSQL settings
+    // --- PostgreSQL Settings ---
     public static String postgresHost() {
-        return getOrDefault("POSTGRES_HOST", "localhost");
+        return getOrDefault("POSTGRES_HOST", "postgres");
     }
 
     public static int postgresPort() {
@@ -65,12 +69,7 @@ public final class ConfigLoader {
         return getRequired("POSTGRES_PASSWORD");
     }
 
-    public static String postgresJdbcUrl() {
-        return String.format("jdbc:postgresql://%s:%d/%s",
-                postgresHost(), postgresPort(), postgresDatabase());
-    }
-
-    // Flink settings
+    // --- Flink & Processing Settings ---
     public static long checkpointIntervalMs() {
         return Long.parseLong(getOrDefault("FLINK_CHECKPOINT_INTERVAL_MS", "60000"));
     }
@@ -79,7 +78,6 @@ public final class ConfigLoader {
         return Integer.parseInt(getOrDefault("FLINK_PARALLELISM", "2"));
     }
 
-    // Processing settings
     public static double stoppedSpeedThreshold() {
         return Double.parseDouble(getOrDefault("STOPPED_SPEED_THRESHOLD_MS", "1.0"));
     }
@@ -92,11 +90,12 @@ public final class ConfigLoader {
         return Long.parseLong(getOrDefault("STATE_TTL_MINUTES", "5"));
     }
 
-    // Helper methods
+    // --- Helper Methods ---
     private static String getRequired(String key) {
         return Optional.ofNullable(System.getenv(key))
+                .filter(s -> !s.isEmpty())
                 .orElseThrow(() -> new IllegalStateException(
-                        "Required environment variable not set: " + key));
+                        "FATAL: Required environment variable not set or empty: " + key));
     }
 
     private static String getOrDefault(String key, String defaultValue) {
