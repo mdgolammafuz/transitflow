@@ -3,9 +3,6 @@ package fi.transitflow.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-/**
- * Input event from Kafka - matches Phase 1 output schema.
- */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class VehiclePosition {
 
@@ -31,7 +28,7 @@ public class VehiclePosition {
     private int delaySeconds;
 
     @JsonProperty("door_status")
-    private int doorStatus;
+    private boolean doorStatus; // FIXED: Changed from int to boolean based on Kafka sample
 
     @JsonProperty("line_id")
     private String lineId;
@@ -48,7 +45,6 @@ public class VehiclePosition {
     @JsonProperty("event_time_ms")
     private long eventTimeMs;
 
-    // Default constructor for Jackson
     public VehiclePosition() {}
 
     // Getters
@@ -59,7 +55,7 @@ public class VehiclePosition {
     public double getSpeedMs() { return speedMs; }
     public int getHeading() { return heading; }
     public int getDelaySeconds() { return delaySeconds; }
-    public int getDoorStatus() { return doorStatus; }
+    public boolean isDoorStatus() { return doorStatus; } // Updated
     public String getLineId() { return lineId; }
     public int getDirectionId() { return directionId; }
     public int getOperatorId() { return operatorId; }
@@ -74,7 +70,7 @@ public class VehiclePosition {
     public void setSpeedMs(double speedMs) { this.speedMs = speedMs; }
     public void setHeading(int heading) { this.heading = heading; }
     public void setDelaySeconds(int delaySeconds) { this.delaySeconds = delaySeconds; }
-    public void setDoorStatus(int doorStatus) { this.doorStatus = doorStatus; }
+    public void setDoorStatus(boolean doorStatus) { this.doorStatus = doorStatus; } // Updated
     public void setLineId(String lineId) { this.lineId = lineId; }
     public void setDirectionId(int directionId) { this.directionId = directionId; }
     public void setOperatorId(int operatorId) { this.operatorId = operatorId; }
@@ -82,12 +78,6 @@ public class VehiclePosition {
     public void setEventTimeMs(long eventTimeMs) { this.eventTimeMs = eventTimeMs; }
 
     public boolean isDoorOpen() {
-        return doorStatus == 1;
-    }
-
-    @Override
-    public String toString() {
-        return String.format("VehiclePosition{id=%d, line=%s, delay=%ds, speed=%.1fm/s}",
-                vehicleId, lineId, delaySeconds, speedMs);
+        return doorStatus;
     }
 }
