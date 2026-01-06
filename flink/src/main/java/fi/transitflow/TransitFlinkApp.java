@@ -21,15 +21,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 
-/**
- * TransitFlow Flink Application
- * 
- * Processes vehicle telemetry in real-time:
- * 1. Consumes from Kafka (fleet.telemetry.raw)
- * 2. Maintains per-vehicle state
- * 3. Computes features and detects stop arrivals
- * 4. Outputs to Redis (features), Kafka (enriched events, stop events)
- */
 public class TransitFlinkApp {
 
     private static final Logger LOG = LoggerFactory.getLogger(TransitFlinkApp.class);
@@ -37,45 +28,39 @@ public class TransitFlinkApp {
     public static void main(String[] args) throws Exception {
         LOG.info("Starting TransitFlow Flink Application");
 
-        // Setup environment
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(ConfigLoader.parallelism());
-
-        // Enable checkpointing
         env.enableCheckpointing(ConfigLoader.checkpointIntervalMs());
 
-        // Kafka source
+        // Kafka source with earliest offsets and partition discovery
         KafkaSource<VehiclePosition> source = KafkaSource.<VehiclePosition>builder()
                 .setBootstrapServers(ConfigLoader.kafkaBootstrapServers())
                 .setTopics(ConfigLoader.kafkaInputTopic())
                 .setGroupId(ConfigLoader.kafkaGroupId())
-                .setStartingOffsets(OffsetsInitializer.latest())
+                .setStartingOffsets(OffsetsInitializer.earliest())
                 .setValueOnlyDeserializer(new VehiclePositionDeserializer())
+                .setProperty("partition.discovery.interval.ms", "10000")
                 .build();
 
-        // Watermark strategy: allow 10 seconds out-of-order
         WatermarkStrategy<VehiclePosition> watermarkStrategy = WatermarkStrategy
                 .<VehiclePosition>forBoundedOutOfOrderness(Duration.ofSeconds(10))
                 .withTimestampAssigner((event, timestamp) -> event.getEventTimeMs())
                 .withIdleness(Duration.ofMinutes(1));
 
-        // Read from Kafka
         DataStream<VehiclePosition> positionStream = env
                 .fromSource(source, watermarkStrategy, "kafka-source")
                 .filter(pos -> pos != null)
                 .name("filter-nulls");
 
-        // Process with stateful function
         SingleOutputStreamOperator<EnrichedEvent> enrichedStream = positionStream
                 .keyBy(VehiclePosition::getVehicleId)
                 .process(new VehicleStateFunction())
                 .name("vehicle-state-processor");
 
-        // Get stop arrivals from side output
         DataStream<StopArrival> stopStream = enrichedStream
                 .getSideOutput(VehicleStateFunction.STOP_ARRIVAL_TAG);
 
-        // Sink: Enriched events to Kafka
+        // Enriched Sink
         KafkaSink<EnrichedEvent> enrichedSink = KafkaSink.<EnrichedEvent>builder()
                 .setBootstrapServers(ConfigLoader.kafkaBootstrapServers())
                 .setRecordSerializer(KafkaRecordSerializationSchema.builder()
@@ -84,11 +69,9 @@ public class TransitFlinkApp {
                         .build())
                 .build();
 
-        enrichedStream
-                .sinkTo(enrichedSink)
-                .name("kafka-sink-enriched");
+        enrichedStream.sinkTo(enrichedSink).name("kafka-sink-enriched");
 
-        // Sink: Stop arrivals to Kafka
+        // Stop Sink
         KafkaSink<StopArrival> stopSink = KafkaSink.<StopArrival>builder()
                 .setBootstrapServers(ConfigLoader.kafkaBootstrapServers())
                 .setRecordSerializer(KafkaRecordSerializationSchema.builder()
@@ -97,16 +80,11 @@ public class TransitFlinkApp {
                         .build())
                 .build();
 
-        stopStream
-                .sinkTo(stopSink)
-                .name("kafka-sink-stops");
+        stopStream.sinkTo(stopSink).name("kafka-sink-stops");
 
-        // Sink: Features to Redis
-        enrichedStream
-                .addSink(new RedisSink())
-                .name("redis-sink-features");
+        // Redis Sink
+        enrichedStream.addSink(new RedisSink()).name("redis-sink-features");
 
-        LOG.info("Job configured, executing...");
         env.execute("TransitFlow Vehicle Processor");
     }
 }
