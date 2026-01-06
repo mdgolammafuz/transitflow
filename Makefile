@@ -1,28 +1,39 @@
-.PHONY: help dev-up dev-down topics test verify run clean flink-build flink-submit flink-cancel flink-verify
+# TransitFlow Unified Makefile
+# Industry-standard automation for Stream Processing Pipeline
 
+# Load environment variables for local scripts from the infra directory
+# The '-' prefix prevents make from failing if the .env file doesn't exist yet
+-include infra/local/.env
+export
+
+.PHONY: help dev-up dev-down topics test verify run clean flink-build flink-test flink-submit flink-cancel flink-verify
+
+# Default target
 help:
 	@echo "TransitFlow Commands"
 	@echo ""
 	@echo "Infrastructure:"
 	@echo "  make dev-up        Start local services (Kafka, Flink, Postgres, Redis)"
-	@echo "  make dev-down      Stop local services"
+	@echo "  make dev-down      Stop local services and clear volumes"
 	@echo "  make topics        Apply topic configuration (idempotent)"
 	@echo ""
-	@echo "Phase 1 - Ingestion:"
+	@echo "Ingestion Bridge:"
 	@echo "  make test          Run Python unit tests"
 	@echo "  make verify        Run ingestion smoke tests"
 	@echo "  make run           Run ingestion bridge (Line 600)"
 	@echo "  make run-full      Run ingestion bridge (All traffic)"
 	@echo ""
-	@echo "Phase 2 - Flink:"
+	@echo "Flink Stream Processing:"
 	@echo "  make flink-build   Build Flink job JAR"
 	@echo "  make flink-test    Run Flink unit tests"
 	@echo "  make flink-submit  Submit job to Flink cluster"
 	@echo "  make flink-cancel  Cancel all running Flink jobs"
-	@echo "  make flink-verify  Run Phase 2 verification"
+	@echo "  make flink-verify  Run Stream Pipeline verification suite"
 	@echo ""
 	@echo "Cleanup:"
-	@echo "  make clean         Remove temp files"
+	@echo "  make clean         Remove temp files and build artifacts"
+
+# --- Infrastructure ---
 
 dev-up:
 	@if [ ! -f infra/local/.env ]; then \
@@ -31,25 +42,27 @@ dev-up:
 	fi
 	cd infra/local && docker-compose up -d
 	@echo ""
-	@echo "Services starting..."
-	@sleep 10
+	@echo "Waiting for services to reach healthy state..."
+	@sleep 15
 	@echo ""
 	@echo "Access:"
 	@echo "  Redpanda Console:  http://localhost:8080"
 	@echo "  Flink Dashboard:   http://localhost:8082"
 	@echo "  MinIO Console:     http://localhost:9001"
-	@echo "  Grafana:           http://localhost:3000 (admin/admin)"
+	@echo "  Grafana:           http://localhost:3000"
 	@echo "  Prometheus:        http://localhost:9090"
 
 dev-down:
-	cd infra/local && docker-compose down
+	cd infra/local && docker-compose down --volumes --remove-orphans
 
-# Executes topics.sh inside the container.
-# This is better than inline commands because it handles retention policies/configs centralized in one file.
+# Centralized topic management inside the container
 topics:
+	@echo "Applying Kafka topic configurations..."
 	docker cp infra/local/init/redpanda/topics.sh redpanda:/tmp/topics.sh
 	docker exec -u 0 redpanda chmod +x /tmp/topics.sh
 	docker exec redpanda /tmp/topics.sh
+
+# --- Ingestion Bridge ---
 
 test:
 	PYTHONPATH=. pytest tests/unit/ -v
@@ -63,9 +76,10 @@ run:
 run-full:
 	PYTHONPATH=. python scripts/run_bridge.py
 
-# --- Phase 2: Flink ---
+# --- Flink Stream Processing ---
 
 flink-build:
+	@echo "Building Flink JAR..."
 	cd flink && mvn clean package -DskipTests
 	@mkdir -p infra/local/flink-jobs
 	cp flink/target/transitflow-flink-1.0.0.jar infra/local/flink-jobs/
@@ -74,21 +88,26 @@ flink-test:
 	cd flink && mvn test
 
 flink-submit:
-	@echo "Submitting Flink job..."
-	docker exec -d flink-jobmanager flink run \
+	@echo "Submitting TransitFlow Vehicle Processor to Flink..."
+	docker exec flink-jobmanager flink run \
 		-d -c fi.transitflow.TransitFlinkApp \
 		/opt/flink/jobs/transitflow-flink-1.0.0.jar
 	@echo ""
 	@echo "Job submitted. Check status at http://localhost:8082"
 
 flink-cancel:
-	@echo "Cancelling all running jobs..."
+	@echo "Cancelling all running Flink jobs..."
 	-docker exec flink-jobmanager flink list | grep RUNNING | awk '{print $$4}' | xargs -I {} docker exec flink-jobmanager flink cancel {}
 
 flink-verify:
-	PYTHONPATH=. python scripts/verify_phase2.py --check-all
+	@echo "Executing Stream Pipeline Verification Suite..."
+	# The script now sees variables like REDIS_PASSWORD directly from the exported .env
+	PYTHONPATH=. python scripts/verify_stream_pipeline.py --check-all
+
+# --- Cleanup ---
 
 clean:
+	@echo "Cleaning workspace..."
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
