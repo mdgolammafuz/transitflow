@@ -6,8 +6,9 @@
 
 set -e
 
-# Default to localhost
-REDPANDA_HOST="${REDPANDA_HOST:-localhost:9092}"
+# When running INSIDE the redpanda container via docker exec, 
+# we use the internal port 29092.
+REDPANDA_HOST="${REDPANDA_HOST:-0.0.0.0:29092}"
 
 # FIXED: Default to 1 for local development (single broker)
 REPLICATION_FACTOR="${REPLICATION_FACTOR:-1}"
@@ -32,6 +33,7 @@ create_topic() {
 
     echo "Ensuring topic: $topic_name"
 
+    # We use eval to handle the conditional compression flag cleanly
     cmd="rpk topic create $topic_name \
         --brokers \"$REDPANDA_HOST\" \
         --partitions $partitions \
@@ -43,36 +45,32 @@ create_topic() {
         cmd="$cmd --config compression.type=$compression"
     fi
 
-    # Suppress error if topic exists
-    eval "$cmd" 2>/dev/null || echo "  - Topic $topic_name likely exists (skipping)."
+    # Suppress error if topic exists, but echo the attempt
+    eval "$cmd" 2>/dev/null || echo "  - Topic $topic_name already exists (skipping)."
 }
 
-# --- Main Telemetry Topics ---
+# --- Main Telemetry Topics (Medallion Architecture) ---
 
-# Raw Telemetry
+# [BRONZE] Raw Telemetry - Short retention to save local disk
 create_topic "fleet.telemetry.raw" 8 $ONE_HOUR "zstd"
 create_topic "fleet.telemetry.dlq" 1 $ONE_WEEK
 
-# Enriched Events
-create_topic "fleet.enriched" 8 $ONE_DAY
+# [SILVER] Enriched Events - Validated against enriched_event.avsc
+create_topic "fleet.enriched" 8 $ONE_DAY "zstd"
 create_topic "fleet.enriched.dlq" 1 $ONE_WEEK
 
-# --- Critical Events ---
-
-# Stop Events
+# [GOLD] Critical Events - Validated against stop_arrival.avsc
 create_topic "fleet.stop_events" 8 $ONE_WEEK
 create_topic "fleet.stop_events.dlq" 1 $ONE_MONTH
 
 # --- Analytics & ML ---
 
-# Predictions
+# Predictions & Inference
 create_topic "fleet.predictions" 8 $ONE_WEEK
 create_topic "fleet.predictions.dlq" 1 $ONE_MONTH
 
-# Anomalies
+# Monitoring
 create_topic "fleet.anomalies" 4 $ONE_MONTH
-
-# Metrics
 create_topic "fleet.metrics" 4 $ONE_WEEK
 
 echo "----------------------------------------"
