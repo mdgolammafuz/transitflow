@@ -11,33 +11,43 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 
 /**
- * Deserialize JSON from Kafka to VehiclePosition.
+ * Robust JSON Deserializer for VehiclePosition.
+ * Uses lazy initialization to prevent null pointers after serialization.
  */
 public class VehiclePositionDeserializer implements DeserializationSchema<VehiclePosition> {
 
     private static final Logger LOG = LoggerFactory.getLogger(VehiclePositionDeserializer.class);
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     private transient ObjectMapper mapper;
 
+    private void ensureMapper() {
+        if (mapper == null) {
+            mapper = new ObjectMapper();
+            // Supports Java 8 Time types (logicalType: timestamp-millis)
+            mapper.registerModule(new JavaTimeModule());
+        }
+    }
+
     @Override
     public void open(InitializationContext context) {
-        mapper = new ObjectMapper();
-        mapper.registerModule(new JavaTimeModule());
+        ensureMapper();
     }
 
     @Override
     public VehiclePosition deserialize(byte[] message) throws IOException {
-        if (mapper == null) {
-            mapper = new ObjectMapper();
-            mapper.registerModule(new JavaTimeModule());
+        if (message == null || message.length == 0) {
+            return null;
         }
+        
+        ensureMapper();
 
         try {
             return mapper.readValue(message, VehiclePosition.class);
         } catch (Exception e) {
-            LOG.warn("Failed to deserialize message: {}", new String(message), e);
-            return null;
+            // Log at debug level to avoid flooding logs with malformed data errors
+            LOG.debug("Failed to deserialize message: {}", new String(message), e);
+            return null; 
         }
     }
 
