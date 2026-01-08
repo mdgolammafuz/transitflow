@@ -16,6 +16,7 @@ from pyspark.sql.functions import round as spark_round
 from pyspark.sql.functions import sum as spark_sum
 from pyspark.sql.functions import when
 
+# Absolute import for package consistency
 from spark.config import create_spark_session, load_config
 
 logging.basicConfig(level=logging.INFO)
@@ -99,7 +100,6 @@ def aggregate_stop_performance(spark: SparkSession, config, process_date: str = 
     logger.info("Aggregating stop performance")
     try:
         silver_df = spark.read.format("delta").load(silver_path)
-        # Note: arrival_timestamp must exist in silver stop_events
         stop_df = (
             silver_df.withColumn("hour_of_day", hour("arrival_timestamp"))
             .withColumn("day_of_week", dayofweek("arrival_timestamp"))
