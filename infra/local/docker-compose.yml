@@ -109,7 +109,6 @@ services:
     environment:
       <<: *app-env
       SPARK_LOCAL_IP: spark-master
-      # Add small memory limits for the JVM
       SPARK_DAEMON_MEMORY: 512m 
     ports:
       - "8083:8080"
@@ -121,8 +120,8 @@ services:
       /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
       "
     volumes:
-      - ../../spark:/opt/spark/jobs
-
+      - ../../spark:/opt/spark/jobs/spark
+  
   spark-worker:
     image: apache/spark:3.5.0
     container_name: spark-worker
@@ -131,7 +130,7 @@ services:
       <<: *app-env
       SPARK_LOCAL_IP: spark-worker
       SPARK_WORKER_CORES: 2
-      SPARK_WORKER_MEMORY: 1536m # Reduced from 2G to prevent OOM
+      SPARK_WORKER_MEMORY: 1536m
       SPARK_DAEMON_MEMORY: 512m
     command: >
       /bin/sh -c "
@@ -139,7 +138,8 @@ services:
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
       "
     volumes:
-      - ../../spark:/opt/spark/jobs
+      - ../../spark:/opt/spark/jobs/spark
+
   # --- State Storage (MinIO) ---
   minio:
     image: minio/minio:RELEASE.2024-01-13T07-53-03Z
