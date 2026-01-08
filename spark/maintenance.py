@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from delta.tables import DeltaTable
 
+# Project-wide absolute import consistency
 from spark.config import create_spark_session, load_config
 
 logging.basicConfig(level=logging.INFO)
@@ -15,18 +16,26 @@ logger = logging.getLogger(__name__)
 
 
 def apply_retention(spark, table_path, retention_days, table_name):
+    """
+    DE#2: Raw Data is Immutable, but Cloud#5: Lifecycle/FinOps
+    requires purging old partitions to manage costs/storage.
+    """
     try:
         if not DeltaTable.isDeltaTable(spark, table_path):
             return
         cutoff_date = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d")
         delta_table = DeltaTable.forPath(spark, table_path)
         delta_table.delete(f"date < '{cutoff_date}'")
-        logger.info(f"Retention applied to {table_name}")
+        logger.info(f"Retention applied to {table_name}: Removed data older than {cutoff_date}")
     except Exception as e:
         logger.error(f"Retention failed for {table_name}: {e}")
 
 
 def vacuum_table(spark, table_path, table_name, retention_hours=168):
+    """
+    Remove files no longer in the latest state of the transaction log.
+    Default 168h (7 days) for safety.
+    """
     try:
         if not DeltaTable.isDeltaTable(spark, table_path):
             return
@@ -37,6 +46,9 @@ def vacuum_table(spark, table_path, table_name, retention_hours=168):
 
 
 def optimize_table(spark, table_path, table_name):
+    """
+    Compact small files to improve read performance.
+    """
     try:
         if not DeltaTable.isDeltaTable(spark, table_path):
             return
@@ -56,17 +68,39 @@ def main():
 
     config = load_config()
     spark = create_spark_session("TransitFlow-Maintenance")
+
+    # Required to allow vacuuming with short retention if needed for local dev
     spark.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
 
     tables = {
         "bronze": [
-            (f"{config.bronze_path}/enriched", "bronze.enriched", config.bronze_retention_days)
+            (f"{config.bronze_path}/enriched", "bronze.enriched", config.bronze_retention_days),
+            (
+                f"{config.bronze_path}/stop_events",
+                "bronze.stop_events",
+                config.bronze_retention_days,
+            ),
         ],
         "silver": [
-            (f"{config.silver_path}/enriched", "silver.enriched", config.silver_retention_days)
+            (f"{config.silver_path}/enriched", "silver.enriched", config.silver_retention_days),
+            (
+                f"{config.silver_path}/stop_events",
+                "silver.stop_events",
+                config.silver_retention_days,
+            ),
         ],
         "gold": [
-            (f"{config.gold_path}/daily_metrics", "gold.daily_metrics", config.gold_retention_days)
+            (f"{config.gold_path}/daily_metrics", "gold.daily_metrics", config.gold_retention_days),
+            (
+                f"{config.gold_path}/hourly_metrics",
+                "gold.hourly_metrics",
+                config.gold_retention_days,
+            ),
+            (
+                f"{config.gold_path}/stop_performance",
+                "gold.stop_performance",
+                config.gold_retention_days,
+            ),
         ],
     }
 
