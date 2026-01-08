@@ -5,14 +5,15 @@
 # --- Configuration ---
 SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4"
 
-# SPARK_SUBMIT: Configured for 8GB RAM local machines
-# Limits jobs to 1 core and 1GB RAM to prevent OOM (Error 137)
-SPARK_SUBMIT := docker exec -it spark-master /opt/spark/bin/spark-submit \
-	--master spark://spark-master:7077 \
-	--conf spark.driver.host=spark-master \
-	--total-executor-cores 1 \
-	--executor-memory 1G \
-	--packages $(SPARK_PKGS)
+# SPARK_SUBMIT: Configured for the /opt/spark/jobs/spark volume mount
+# PYTHONPATH allows absolute imports like 'from spark.config' to find the package
+# We set spark.driver.host to spark-master for consistent container networking
+SPARK_SUBMIT := docker exec -it spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  --conf spark.driver.host=spark-master \
+  --total-executor-cores 1 \
+  --executor-memory 1G \
+  --packages $(SPARK_PKGS)
 
 help:
 	@echo "TransitFlow - Principal Engineer Data Pipeline Control"
@@ -105,21 +106,27 @@ flink-submit:
 flink-verify:
 	docker exec -it redpanda rpk topic consume fleet.enriched -n 5
 
-# --- Spark & Delta ---
+# --- Spark & Delta Operations ---
+# Note: Path corresponds to the volume mount /opt/spark/jobs/spark/
 spark-bronze:
-	$(SPARK_SUBMIT) /opt/spark/jobs/bronze_writer.py --table all
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all
 
 spark-silver:
-	$(SPARK_SUBMIT) /opt/spark/jobs/silver_transform.py
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/silver_transform.py
 
 spark-gold:
-	$(SPARK_SUBMIT) /opt/spark/jobs/gold_aggregation.py
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/gold_aggregation.py
 
 spark-maintenance:
-	$(SPARK_SUBMIT) /opt/spark/jobs/maintenance.py
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/maintenance.py
 
 spark-reconcile:
-	$(SPARK_SUBMIT) /opt/spark/jobs/reconciliation.py --save
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/reconciliation.py --save
+
+# Lakehouse Verification
+verify-lakehouse:
+	@echo "Running Final Lakehouse Integrity Check..."
+	PYTHONPATH=. python scripts/verify_lakehouse.py
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
