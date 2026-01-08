@@ -1,3 +1,9 @@
+"""
+Reconciliation Job: Data Integrity Audit
+Pattern: Unified Stream/Batch (DE#5)
+Verifies that Bronze and Silver layers are synchronized within acceptable thresholds.
+"""
+
 import argparse
 import logging
 from dataclasses import asdict, dataclass
@@ -5,6 +11,7 @@ from datetime import datetime
 
 from pyspark.sql.functions import col
 
+# Absolute import for package consistency
 from spark.config import create_spark_session, load_config
 
 logging.basicConfig(level=logging.INFO)
@@ -33,22 +40,32 @@ class ReconciliationResult:
 def get_count(spark, path, date):
     """Safely get count for a specific date partition."""
     try:
+        # Optimization: We only check if it's a valid Delta Table first
+        from delta.tables import DeltaTable
+
+        if not DeltaTable.isDeltaTable(spark, path):
+            return 0
+
         return spark.read.format("delta").load(path).filter(col("date") == date).count()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not retrieve count for {path}: {e}")
         return 0
 
 
 def save_to_postgres(result: ReconciliationResult, config):
-    """Persist the audit result to the PostgreSQL database."""
+    """
+    Persist the audit result to the PostgreSQL database.
+    Ensures DE#5 visibility into pipeline health.
+    """
     try:
         import psycopg2
 
         conn = psycopg2.connect(
-            host=getattr(config, "postgres_host", "postgres"),
-            port=getattr(config, "postgres_port", "5432"),
-            user=getattr(config, "postgres_user", "transit"),
-            password=getattr(config, "postgres_password", "transit_secure_local"),
-            database=getattr(config, "postgres_db", "transit"),
+            host=config.postgres_host,
+            port=config.postgres_port,
+            user=config.postgres_user,
+            password=config.postgres_password,
+            database=config.postgres_db,
         )
         with conn.cursor() as cur:
             cur.execute(
@@ -89,7 +106,7 @@ def save_to_postgres(result: ReconciliationResult, config):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="TransitFlow Reconciliation Audit")
     parser.add_argument("--date", type=str, help="YYYY-MM-DD")
     parser.add_argument("--save", action="store_true", default=True)
     args = parser.parse_args()
@@ -98,17 +115,17 @@ def main():
     config = load_config()
     spark = create_spark_session("TransitFlow-Reconciliation")
 
-    # Perform counts
+    # 1. Perform cross-layer counts
     b_count = get_count(spark, f"{config.bronze_path}/enriched", target_date)
     s_count = get_count(spark, f"{config.silver_path}/enriched", target_date)
 
-    # Calculate metrics
+    # 2. Calculate metrics
     diff = abs(b_count - s_count)
     diff_pct = (diff / b_count * 100) if b_count > 0 else 0.0
-    threshold = 20.0
+    threshold = 20.0  # 20% threshold for deduplication/timing drift
     is_passed = diff_pct <= threshold
 
-    # Create result object for consistency
+    # 3. Create result object for consistency
     result = ReconciliationResult(
         date=target_date,
         table_name="enriched",
@@ -120,14 +137,17 @@ def main():
         threshold_pct=threshold,
     )
 
+    # 4. Console Reporting
     print("\n" + "=" * 60)
     print(f"RECONCILIATION REPORT: {result.date}")
     status = "PASS" if result.passed else "FAIL"
     print(f"Status: {status} (Threshold: {result.threshold_pct}%)")
-    print(f"Bronze: {result.stream_count:,} | Silver: {result.batch_count:,}")
-    print(f"Difference: {result.difference:,} ({result.diff_percentage}%)")
+    print(f"Bronze Count: {result.stream_count:,}")
+    print(f"Silver Count: {result.batch_count:,}")
+    print(f"Difference:   {result.difference:,} ({result.diff_percentage}%)")
     print("=" * 60 + "\n")
 
+    # 5. Persistent Audit Logging
     if args.save:
         save_to_postgres(result, config)
 
