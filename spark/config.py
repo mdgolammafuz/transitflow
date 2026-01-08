@@ -70,7 +70,7 @@ def load_config() -> SparkConfig:
     def get_int(key: str, default: int) -> int:
         return int(os.environ.get(key, str(default)))
 
-    # Required variables (Strict check to pass test_load_config_missing_required)
+    # Required variables
     minio_user = get_required("MINIO_ROOT_USER")
     minio_pass = get_required("MINIO_ROOT_PASSWORD")
     pg_user = get_required("POSTGRES_USER")
