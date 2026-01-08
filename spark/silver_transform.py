@@ -1,13 +1,11 @@
 """
-Silver Transform: Bronze → Silver (Batch)
-
+Silver Transform: Bronze -> Silver (Batch)
 Transforms raw Bronze data into cleaned, deduplicated Silver layer.
 
-Operations:
-- Parse timestamps
-- Deduplicate by (vehicle_id, event_time_ms)
-- Add derived columns
-- Validate data quality
+Optimized for 8GB RAM environments:
+- Removed expensive RDD isEmpty() calls
+- Streamlined window functions
+- Uses inter-batch deduplication via Delta Merge
 """
 
 import argparse
@@ -19,6 +17,7 @@ from pyspark.sql.functions import abs as spark_abs
 from pyspark.sql.functions import col, from_unixtime, row_number, to_timestamp, when
 from pyspark.sql.window import Window
 
+# Absolute import for package consistency
 from spark.config import create_spark_session, load_config
 
 logging.basicConfig(level=logging.INFO)
@@ -26,13 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 def transform_enriched(spark: SparkSession, config, process_date: str = None):
-    """
-    Transform bronze.enriched → silver.enriched
-    """
+    """Transform bronze.enriched -> silver.enriched"""
     bronze_path = f"{config.bronze_path}/enriched"
     silver_path = f"{config.silver_path}/enriched"
 
-    logger.info(f"Transforming enriched data: {bronze_path} -> {silver_path}")
+    logger.info(f"Transforming enriched: {bronze_path} -> {silver_path}")
 
     try:
         # 1. Read raw bronze data
@@ -41,12 +38,7 @@ def transform_enriched(spark: SparkSession, config, process_date: str = None):
         if process_date:
             bronze_df = bronze_df.filter(col("date") == process_date)
 
-        # Check if data exists
-        if bronze_df.rdd.isEmpty():
-            logger.warning("No Bronze data found for processing.")
-            return
-
-        # 2. Deduplicate: keep latest record per (vehicle_id, event_time_ms)
+        # 2. Intra-batch Deduplication: keep latest record per (vehicle_id, event_time_ms)
         window = Window.partitionBy("vehicle_id", "event_time_ms").orderBy(
             col("kafka_offset").desc()
         )
@@ -55,7 +47,6 @@ def transform_enriched(spark: SparkSession, config, process_date: str = None):
             bronze_df.withColumn("row_num", row_number().over(window))
             .filter(col("row_num") == 1)
             .drop("row_num")
-            # Enforce data types and add derived metrics
             .withColumn("door_status", col("door_status").cast("boolean"))
             .withColumn("event_timestamp", to_timestamp(from_unixtime(col("event_time_ms") / 1000)))
             .withColumn("speed_kmh", col("speed_ms") * 3.6)
@@ -68,9 +59,8 @@ def transform_enriched(spark: SparkSession, config, process_date: str = None):
             )
         )
 
-        # 3. Write to Silver (Idempotent Merge or Initialize)
+        # 3. Inter-batch Deduplication (Merge)
         if DeltaTable.isDeltaTable(spark, silver_path):
-            logger.info("Merging into existing Silver table...")
             delta_table = DeltaTable.forPath(spark, silver_path)
             (
                 delta_table.alias("target")
@@ -82,32 +72,20 @@ def transform_enriched(spark: SparkSession, config, process_date: str = None):
                 .execute()
             )
         else:
-            logger.info("Creating new Silver table for the first time...")
-            (
-                silver_df.write.format("delta")
-                .mode("overwrite")
-                .option("overwriteSchema", "true")
-                .partitionBy("date")
-                .save(silver_path)
-            )
-
-        count = spark.read.format("delta").load(silver_path).count()
-        logger.info(f"Silver enriched total records: {count}")
+            silver_df.write.format("delta").mode("overwrite").partitionBy("date").save(silver_path)
 
     except Exception as e:
-        logger.error(f"Silver Transformation failed: {str(e)}")
+        logger.error(f"Silver Enriched Transformation failed: {str(e)}")
 
 
 def transform_stop_events(spark: SparkSession, config, process_date: str = None):
-    """
-    Transform bronze.stop_events → silver.stop_events
-    """
+    """Transform bronze.stop_events -> silver.stop_events"""
     bronze_path = f"{config.bronze_path}/stop_events"
     silver_path = f"{config.silver_path}/stop_events"
 
     try:
+        # Check if Bronze exists before reading
         if not DeltaTable.isDeltaTable(spark, bronze_path):
-            logger.warning("Bronze stop_events table not found. Skipping.")
             return
 
         bronze_df = spark.read.format("delta").load(bronze_path)
@@ -141,14 +119,9 @@ def transform_stop_events(spark: SparkSession, config, process_date: str = None)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Silver Transform")
-    parser.add_argument(
-        "--table",
-        choices=["enriched", "stop_events", "all"],
-        default="all",
-        help="Table to transform",
-    )
-    parser.add_argument("--date", type=str, default=None, help="Process specific date (YYYY-MM-DD)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--table", choices=["enriched", "stop_events", "all"], default="all")
+    parser.add_argument("--date", type=str, default=None)
     args = parser.parse_args()
 
     config = load_config()
@@ -156,11 +129,9 @@ def main():
 
     if args.table in ["enriched", "all"]:
         transform_enriched(spark, config, args.date)
-
     if args.table in ["stop_events", "all"]:
         transform_stop_events(spark, config, args.date)
 
-    logger.info("Silver transform complete")
     spark.stop()
 
 
