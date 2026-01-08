@@ -25,7 +25,6 @@ from spark.config import create_spark_session, load_config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BronzeWriter")
 
-# Schema for enriched events (Synchronized with EnrichedEvent.java)
 ENRICHED_SCHEMA = StructType(
     [
         StructField("vehicle_id", IntegerType(), False),
@@ -36,7 +35,7 @@ ENRICHED_SCHEMA = StructType(
         StructField("speed_ms", DoubleType(), True),
         StructField("heading", IntegerType(), True),
         StructField("delay_seconds", IntegerType(), True),
-        StructField("door_status", BooleanType(), True),  # Aligned to Phase 2 Boolean fix
+        StructField("door_status", BooleanType(), True),
         StructField("line_id", StringType(), True),
         StructField("direction_id", IntegerType(), True),
         StructField("operator_id", IntegerType(), True),
@@ -51,7 +50,6 @@ ENRICHED_SCHEMA = StructType(
     ]
 )
 
-# Schema for stop events (Synchronized with StopArrival.java)
 STOP_EVENTS_SCHEMA = StructType(
     [
         StructField("vehicle_id", IntegerType(), False),
@@ -77,15 +75,8 @@ def write_bronze_stream(
     checkpoint_path: str,
     table_name: str,
 ):
-    """
-    Kafka to Delta Lake Bronze layer.
-    DE#2: Append-only, never update or delete.
-    DE#6: Exactly-once via Checkpointing.
-    """
     logger.info(f"Initializing stream: {table_name}")
 
-    # 1. Source: Kafka
-    # failOnDataLoss=false is used for development flexibility
     kafka_df = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", kafka_servers)
@@ -95,26 +86,23 @@ def write_bronze_stream(
         .load()
     )
 
-    # 2. Transform: Parse JSON and Add Audit Metadata
     parsed_df = (
         kafka_df.select(
             from_json(col("value").cast("string"), schema).alias("data"),
             col("partition").alias("kafka_partition"),
             col("offset").alias("kafka_offset"),
             col("timestamp").alias("kafka_timestamp"),
-        ).select(
+        )
+        .select(
             "data.*",
             "kafka_partition",
             "kafka_offset",
             "kafka_timestamp",
             current_timestamp().alias("ingestion_time"),
         )
-        # Partitioning by date is critical for VACUUM and performance
         .withColumn("date", to_date(col("kafka_timestamp")))
     )
 
-    # 3. Sink: Delta Lake (Append Mode)
-    # Using 'trigger' to balance between latency and file size
     return (
         parsed_df.writeStream.format("delta")
         .outputMode("append")
@@ -140,7 +128,6 @@ def main():
 
     queries = []
 
-    # Processing Enriched Events
     if args.table in ["enriched", "all"]:
         queries.append(
             write_bronze_stream(
@@ -154,7 +141,6 @@ def main():
             )
         )
 
-    # Processing Stop Events
     if args.table in ["stop_events", "all"]:
         queries.append(
             write_bronze_stream(
