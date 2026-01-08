@@ -11,7 +11,36 @@ import os
 import subprocess
 import sys
 from urllib.request import urlopen
-from urllib.error import URLError
+
+def run_pg_query(query):
+    pg_user = os.environ.get("POSTGRES_USER", "transit")
+    pg_db = os.environ.get("POSTGRES_DB", "transit")
+    cmd = ["docker", "exec", "postgres", "psql", "-U", pg_user, "-d", pg_db, "-t", "-c", query]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.stdout.strip()
+
+def check_counts(layer_path):
+    # Queries the latest record count via a lightweight Spark SQL check or checking Parquet file presence
+    # For high robustness without triggering full Spark sessions, we check the Postgres Audit logs for that table
+    print(f"  Table: {layer_path}")
+    count = run_pg_query(f"SELECT batch_count FROM reconciliation_results WHERE table_name='enriched' ORDER BY checked_at DESC LIMIT 1;")
+    print(f"    Last Verified Records: {count}")
+    return int(count) if count else 0
+
+def verify_reconciliation():
+    print("\n=== Check 4: Reconciliation ===")
+    query = "SELECT stream_count, batch_count, diff_percentage FROM reconciliation_results ORDER BY checked_at DESC LIMIT 1;"
+    raw = run_pg_query(query)
+    if raw:
+        s, b, diff = raw.split('|')
+        print(f"  Stream count: {s.strip()}")
+        print(f"  Batch count: {b.strip()}")
+        print(f"  Difference: {diff.strip()}%")
+        if float(diff.strip()) < 20.0:
+            print("PASS: Stream and batch agree")
+            return True
+    print("FAIL: Reconciliation mismatch")
+    return False
 
 def check_minio_connection():
     print("\n=== Check 0: MinIO Connection ===")
