@@ -1,0 +1,20 @@
+# --- Existing Testing framework ---
+pytest>=8.0.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.23.0
+pytest-mock>=3.12.0
+
+# --- Spark local runtime (for imports and unit testing) ---
+pyspark==3.5.0
+delta-spark==3.0.0
+
+# --- Code quality & Linting ---
+flake8>=7.0.0
+black>=24.1.0
+isort>=5.13.0
+mypy>=1.8.0
+
+# --- Utilities ---
+psycopg2-binary>=2.9.9
+faker>=22.0.0
+httpx>=0.26.0
