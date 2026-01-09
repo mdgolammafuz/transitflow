@@ -1,0 +1,92 @@
+# Staging Models Configuration
+# Pattern: Quality as Firewall
+
+version: 2
+
+models:
+  - name: stg_enriched
+    description: "Cleaned and typed enriched events from Bronze layer"
+    columns:
+      - name: vehicle_id
+        description: "Unique vehicle identifier"
+        tests:
+          - not_null
+          
+      - name: event_time_ms
+        description: "Event timestamp in milliseconds"
+        tests:
+          - not_null
+          
+      - name: event_timestamp
+        description: "Parsed event timestamp"
+        tests:
+          - not_null
+          
+      - name: latitude
+        description: "WGS84 latitude"
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 59.9
+              max_value: 60.4
+              
+      - name: longitude
+        description: "WGS84 longitude"
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 24.5
+              max_value: 25.2
+              
+      - name: delay_seconds
+        description: "Delay from schedule"
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -3600
+              max_value: 7200
+              
+      - name: delay_category
+        description: "Categorized delay status"
+        tests:
+          - accepted_values:
+              values: ['on_time', 'slight_delay', 'delayed', 'early']
+              
+      - name: speed_kmh
+        description: "Speed in km/h"
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 150
+              
+    tests:
+      # Uniqueness constraint (data contract)
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - vehicle_id
+            - event_time_ms
+
+  - name: stg_stop_events
+    description: "Cleaned stop arrival events"
+    columns:
+      - name: vehicle_id
+        tests:
+          - not_null
+          
+      - name: stop_id
+        tests:
+          - not_null
+          
+      - name: delay_at_arrival
+        description: "ML target variable"
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -3600
+              max_value: 7200
+              
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - vehicle_id
+            - stop_id
+            - arrival_time
