@@ -1,0 +1,65 @@
+# Source Definitions
+# Pattern: Ingestion is a Contract
+
+version: 2
+
+sources:
+  - name: bronze
+    description: "Raw data from streaming ingestion (Delta Lake Bronze layer)"
+    database: "{{ env_var('DBT_DATABASE', 'transitflow') }}"
+    schema: bronze
+    
+    # Freshness SLO: data should be < 1 hour old
+    freshness:
+      warn_after: {count: 30, period: minute}
+      error_after: {count: 60, period: minute}
+    loaded_at_field: ingestion_time
+    
+    tables:
+      - name: enriched
+        description: "Enriched vehicle telemetry events from Flink"
+        columns:
+          - name: vehicle_id
+            description: "Unique vehicle identifier"
+            tests:
+              - not_null
+          - name: event_time_ms
+            description: "Event timestamp in milliseconds"
+            tests:
+              - not_null
+          - name: latitude
+            description: "WGS84 latitude"
+          - name: longitude
+            description: "WGS84 longitude"
+          - name: delay_seconds
+            description: "Delay from schedule in seconds"
+          - name: line_id
+            description: "Transit line identifier"
+          - name: ingestion_time
+            description: "When the record was written to Bronze"
+            
+      - name: stop_events
+        description: "Stop arrival events - ML training labels"
+        columns:
+          - name: vehicle_id
+            tests:
+              - not_null
+          - name: stop_id
+            description: "Stop where arrival was detected"
+            tests:
+              - not_null
+          - name: delay_at_arrival
+            description: "Delay at stop arrival - ML target variable"
+            tests:
+              - not_null
+
+  - name: reference
+    description: "Static reference data from GTFS"
+    schema: reference
+    
+    tables:
+      - name: seed_stops
+        description: "GTFS stops reference data"
+        
+      - name: seed_lines
+        description: "GTFS lines reference data"
