@@ -1,0 +1,66 @@
+# TransitFlow dbt Project
+# Pattern: Semantic Interface
+
+name: 'transitflow'
+version: '1.0.0'
+config-version: 2
+
+profile: 'transitflow'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Model configurations
+models:
+  transitflow:
+    # Staging: clean and type-cast source data
+    staging:
+      +materialized: view
+      +schema: staging
+      
+    # Intermediate: business logic transformations
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+      
+    # Dimensions: SCD Type 2 slowly changing dimensions
+    dimensions:
+      +materialized: table
+      +schema: dimensions
+      
+    # Marts: fact tables for downstream consumption
+    marts:
+      +materialized: table
+      +schema: marts
+
+# Seed configurations
+seeds:
+  transitflow:
+    +schema: reference
+
+# Test configurations
+tests:
+  +severity: error
+  +store_failures: true
+
+# Variables
+vars:
+  # Delay thresholds (seconds)
+  on_time_threshold: 60
+  delayed_threshold: 300
+  
+  # Data quality thresholds
+  max_delay_seconds: 7200      # 2 hours
+  min_delay_seconds: -3600     # 1 hour early
+  
+  # SCD Type 2 sentinel date
+  scd_end_date: '9999-12-31'
