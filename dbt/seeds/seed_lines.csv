@@ -1,0 +1,16 @@
+line_id,line_name,line_type,operator_name
+600,Bus 600 - Arabianranta,bus,Helsingin Bussiliikenne
+550,Bus 550 - Itäkeskus-Westendinasema,bus,Nobina Finland
+615,Bus 615 - Rautatientori-Viikinmäki,bus,Helsingin Bussiliikenne
+23,Tram 23 - Rautatientori-Pasila,tram,HKL
+4,Tram 4 - Katajanokka-Munkkiniemi,tram,HKL
+9,Tram 9 - Pasila-Jätkäsaari,tram,HKL
+M1,Metro M1 - Vuosaari-Matinkylä,metro,HKL
+M2,Metro M2 - Tapiola-Mellunmäki,metro,HKL
+R,Train R - Kirkkonummi-Riihimäki,train,VR
+A,Train A - Helsinki-Leppävaara,train,VR
+K,Train K - Helsinki-Kerava,train,VR
+N,Train N - Helsinki-Espoo,train,VR
+510,Bus 510 - Kamppi-Leppävaara,bus,Nobina Finland
+520,Bus 520 - Kamppi-Olari,bus,Nobina Finland
+560,Bus 560 - Pasila-Myyrmäki,bus,Pohjolan Liikenne
