@@ -1,3 +1,5 @@
+version: '3.8'
+
 x-app-env: &app-env
   KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
   POSTGRES_HOST: "postgres"
@@ -27,9 +29,12 @@ services:
       - --check=false
       - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
       - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      # NEW: Explicitly enable Schema Registry on all interfaces
+      - --schema-registry-addr 0.0.0.0:8081
     ports:
       - "9092:9092"
       - "9644:9644"
+      - "8081:8081" # NEW: Schema Registry Port
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -43,6 +48,9 @@ services:
     container_name: redpanda-console
     environment:
       KAFKA_BROKERS: redpanda:29092
+      # NEW: Console needs to know about Schema Registry
+      SCHEMA_REGISTRY_ENABLED: "true"
+      SCHEMA_REGISTRY_URLS: http://redpanda:8081
     ports:
       - "8080:8080"
     depends_on:
@@ -204,6 +212,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # --- Data Transformation (dbt) ---
+  dbt:
+    image: python:3.10-slim
+    container_name: dbt
+    working_dir: /usr/app
+    environment:
+      <<: *app-env
+      # Specific dbt env vars can go here if needed
+    volumes:
+      - ../../:/usr/app  # Mount root so we see dbt/ folder
+    command: tail -f /dev/null # Keep alive for manual execution
+    networks:
+      - default
 
   # --- Observability ---
   prometheus:
