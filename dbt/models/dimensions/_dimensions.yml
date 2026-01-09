@@ -1,0 +1,58 @@
+# Dimension Models Configuration
+# Pattern: SCD Type 2 - Slowly Changing Dimensions
+
+version: 2
+
+models:
+  - name: dim_stops
+    description: "Stop dimension with SCD Type 2 history tracking"
+    columns:
+      - name: stop_key
+        description: "Surrogate key for the dimension"
+        tests:
+          - unique
+          - not_null
+          
+      - name: stop_id
+        description: "Natural key - HSL stop ID"
+        tests:
+          - not_null
+          
+      - name: stop_name
+        description: "Stop name (may change over time)"
+        tests:
+          - not_null
+          
+      - name: valid_from
+        description: "Start date of this version"
+        tests:
+          - not_null
+          
+      - name: valid_to
+        description: "End date of this version (9999-12-31 if current)"
+        tests:
+          - not_null
+          
+      - name: is_current
+        description: "Flag indicating current version"
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+              
+  - name: dim_lines
+    description: "Transit line dimension with SCD Type 2 history"
+    columns:
+      - name: line_key
+        tests:
+          - unique
+          - not_null
+          
+      - name: line_id
+        tests:
+          - not_null
+          
+      - name: is_current
+        tests:
+          - not_null
