@@ -1,0 +1,93 @@
+# Mart Models Configuration
+# Pattern: Semantic Interface (Data Contracts)
+
+version: 2
+
+models:
+  - name: fct_stop_arrivals
+    description: |
+      Fact table for stop arrivals.
+      This is the primary table for ML training - each row is a training example.
+      
+      Data Contract:
+      - Unique by (vehicle_id, stop_id, arrival_time)
+      - delay_at_arrival is the target variable
+      - All foreign keys reference valid dimensions
+    columns:
+      - name: arrival_id
+        description: "Surrogate key for the arrival"
+        tests:
+          - unique
+          - not_null
+          
+      - name: vehicle_id
+        tests:
+          - not_null
+          
+      - name: stop_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_stops')
+              field: stop_id
+              config:
+                where: "is_current = true"
+          
+      - name: line_id
+        tests:
+          - relationships:
+              to: ref('dim_lines')
+              field: line_id
+              config:
+                where: "is_current = true"
+          
+      - name: delay_at_arrival
+        description: "ML target variable - seconds late (+) or early (-)"
+        tests:
+          - not_null
+          
+      - name: arrival_timestamp
+        tests:
+          - not_null
+          
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - vehicle_id
+            - stop_id
+            - arrival_time
+            
+  - name: fct_daily_performance
+    description: |
+      Daily aggregated performance metrics by line.
+      Used for dashboards and reporting.
+      
+      Data Contract:
+      - One row per line per day
+      - All metrics are non-null
+    columns:
+      - name: line_id
+        tests:
+          - not_null
+          
+      - name: metric_date
+        tests:
+          - not_null
+          
+      - name: total_events
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              
+      - name: on_time_percentage
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 100
+              
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - line_id
+            - metric_date
