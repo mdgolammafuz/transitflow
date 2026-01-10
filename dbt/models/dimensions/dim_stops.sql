@@ -1,52 +1,31 @@
 /*
     Dimension: Stops (SCD Type 2)
-    
     Pattern: Slowly Changing Dimension Type 2
-    - Tracks historical changes to stop attributes
-    - Creates new row when stop_name or location changes
-    - Preserves full history with valid_from/valid_to dates
     
-    Interview talking point:
-    "When a stop is renamed, we don't update in place. We close the old 
-    record (set valid_to) and insert a new record (valid_from = today).
-    This preserves history so we can answer 'what was this stop called
-    on date X?' - crucial for historical analysis and ML training."
+    This model transforms the raw snapshot history into a clean dimension.
 */
 
-with seed_stops as (
-    select * from {{ ref('seed_stops') }}
+with snapshot_source as (
+    -- Pulling from the snapshot we created in the dbt/snapshots/ folder
+    select * from {{ ref('dim_stops_snapshot') }}
 ),
 
--- Current state from seed data
-current_stops as (
-    select
-        stop_id,
-        stop_name,
-        stop_lat as latitude,
-        stop_lon as longitude,
-        zone_id,
-        stop_code,
-        -- SCD Type 2 fields
-        current_date as valid_from,
-        cast('{{ var("scd_end_date") }}' as date) as valid_to,
-        true as is_current
-    from seed_stops
-),
-
--- Generate surrogate key
 final as (
     select
-        {{ dbt_utils.generate_surrogate_key(['stop_id', 'valid_from']) }} as stop_key,
+        -- Use the dbt-generated surrogate key from the snapshot
+        {{ dbt_utils.generate_surrogate_key(['stop_id', 'dbt_valid_from']) }} as stop_key,
         stop_id,
         stop_name,
         latitude,
         longitude,
         zone_id,
         stop_code,
-        valid_from,
-        valid_to,
-        is_current
-    from current_stops
+        
+        -- Mapping dbt internal snapshot columns to business names
+        dbt_valid_from as valid_from,
+        coalesce(dbt_valid_to, cast('{{ var("scd_end_date") }}' as date)) as valid_to,
+        (dbt_valid_to is null) as is_current
+    from snapshot_source
 )
 
 select * from final
