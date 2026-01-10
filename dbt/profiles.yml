@@ -1,21 +1,9 @@
-# dbt Connection Profiles
-# NOTE: In production, use environment variables for credentials
-
 transitflow:
   target: dev
   outputs:
     dev:
       type: duckdb
-      path: '{{ env_var("DBT_DATABASE_PATH", "/tmp/transitflow.duckdb") }}'
+      # No fallback: if the env_var is missing, dbt will rightfully crash
+      path: '{{ env_var("DBT_DATABASE_PATH") }}'
       schema: main
       threads: 4
-      
-    # Delta Lake profile (requires dbt-delta plugin)
-    # Uncomment when running with full Spark infrastructure
-    # delta:
-    #   type: spark
-    #   method: thrift
-    #   host: localhost
-    #   port: 10000
-    #   schema: transitflow
-    #   threads: 4
