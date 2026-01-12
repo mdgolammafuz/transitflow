@@ -1,14 +1,15 @@
 .PHONY: help dev-up dev-down clean topics setup-test lint test-unit test-all \
         verify-pipeline run run-full flink-build flink-submit \
         spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
-        dbt-run dbt-test dbt-docs schema-register schema-check schema-list
+        dbt-run dbt-test dbt-docs schema-register schema-check schema-list \
+        feature-api feature-sync feature-verify feature-test
 
 # --- Configuration ---
 -include infra/local/.env
 
 # Local connectivity constants
 REGISTRY_URL := $(if $(SCHEMA_REGISTRY_URL),$(SCHEMA_REGISTRY_URL),http://localhost:8081)
-SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4"
+SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.6.0"
 
 # Spark execution wrapper
 SPARK_SUBMIT := docker exec -it spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
@@ -18,13 +19,16 @@ SPARK_SUBMIT := docker exec -it spark-master /usr/bin/env PYTHONPATH=/opt/spark/
   --executor-memory 1G \
   --packages $(SPARK_PKGS)
 
-# Environment propagation for database and registry utilities
+# Environment propagation for database, registry, and feature store utilities
 DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
           POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
           POSTGRES_DB=$(POSTGRES_DB) \
           POSTGRES_HOST=127.0.0.1 \
           POSTGRES_PORT=$(POSTGRES_PORT) \
-          SCHEMA_REGISTRY_URL=$(REGISTRY_URL)
+          REDIS_HOST=127.0.0.1 \
+          REDIS_PORT=6379 \
+          SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
+          FEATURE_API_URL=http://localhost:8000
 
 # dbt execution context
 DBT := cd dbt && DBT_PROFILES_DIR=. $(DB_ENV) dbt
@@ -34,7 +38,7 @@ help:
 	@echo ""
 	@echo "Quality & Validation:"
 	@echo "  make lint               Auto-format and check PEP8 compliance"
-	@echo "  make test-all           Run all unit tests (Registry, Contracts, Spark)"
+	@echo "  make test-all           Run all unit tests (Registry, Contracts, Spark, Feature Store)"
 	@echo "  make verify-pipeline    Run complete end-to-end integrity suite"
 	@echo ""
 	@echo "Infrastructure:"
@@ -63,6 +67,12 @@ help:
 	@echo "  make dbt-run            Run transformation lineage (Staging to Marts)"
 	@echo "  make dbt-test           Execute data contract validation tests"
 	@echo "  make dbt-docs           Generate and serve data catalog/lineage"
+	@echo ""
+	@echo "Feature Store & ML Serving:"
+	@echo "  make feature-api        Launch FastAPI Feature Serving API"
+	@echo "  make feature-sync       Sync dbt Gold Marts to PostgreSQL Feature Store"
+	@echo "  make feature-verify     Run Feature Store integration verification"
+	@echo "  make feature-test       Run Feature Store unit tests"
 
 # --- Infrastructure Management ---
 dev-up:
@@ -82,9 +92,9 @@ topics:
 
 # --- Quality Assurance ---
 lint:
-	isort spark/ tests/ src/ scripts/
-	black spark/ tests/ src/ scripts/
-	flake8 spark/ tests/ src/ scripts/
+	isort feature_store/ scripts/ tests/ src/
+	black feature_store/ scripts/ tests/ src/
+	ruff check feature_store/ scripts/ tests/ src/
 
 test-all:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/ -v
@@ -149,6 +159,19 @@ dbt-docs:
 	$(DBT) docs generate
 	@echo "Serving documentation at http://localhost:8085"
 	$(DBT) docs serve --port 8085
+
+# --- Feature Store & ML Serving ---
+feature-api:
+	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 feature_store/api.py
+
+feature-sync:
+	$(SPARK_SUBMIT) /opt/spark/jobs/feature_store/feature_sync.py
+
+feature-verify:
+	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/verify_feature_store.py --check-all
+
+feature-test:
+	PYTHONPATH=$(CURDIR) pytest tests/unit/feature_store/ -v
 
 # --- Orchestrated Verification ---
 verify-pipeline:
