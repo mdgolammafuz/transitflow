@@ -2,8 +2,11 @@ transitflow:
   target: dev
   outputs:
     dev:
-      type: duckdb
-      # No fallback: if the env_var is missing, dbt will rightfully crash
-      path: '{{ env_var("DBT_DATABASE_PATH") }}'
-      schema: main
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST') }}"
+      user: "{{ env_var('POSTGRES_USER') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      port: "{{ env_var('POSTGRES_PORT') | int }}"
+      dbname: "{{ env_var('POSTGRES_DB') }}"
+      schema: public
       threads: 4

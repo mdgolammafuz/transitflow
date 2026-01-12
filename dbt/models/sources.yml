@@ -5,8 +5,7 @@ version: 2
 
 sources:
   - name: bronze
-    description: "Raw data from streaming ingestion (Delta Lake Bronze layer)"
-    database: "{{ env_var('DBT_DATABASE', 'transitflow') }}"
+    description: "Raw data from streaming ingestion (Landed in Postgres Bronze schema)"
     schema: bronze
     
     # Freshness SLO: data should be < 1 hour old
@@ -21,11 +20,11 @@ sources:
         columns:
           - name: vehicle_id
             description: "Unique vehicle identifier"
-            tests:
+            data_tests:
               - not_null
           - name: event_time_ms
             description: "Event timestamp in milliseconds"
-            tests:
+            data_tests:
               - not_null
           - name: latitude
             description: "WGS84 latitude"
@@ -42,15 +41,15 @@ sources:
         description: "Stop arrival events - ML training labels"
         columns:
           - name: vehicle_id
-            tests:
+            data_tests:
               - not_null
           - name: stop_id
             description: "Stop where arrival was detected"
-            tests:
+            data_tests:
               - not_null
           - name: delay_at_arrival
             description: "Delay at stop arrival - ML target variable"
-            tests:
+            data_tests:
               - not_null
 
   - name: reference
