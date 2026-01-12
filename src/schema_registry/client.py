@@ -81,3 +81,28 @@ class SchemaRegistryClient:
             return True
         except SchemaRegistryError:
             return False
+    def list_subjects(self) -> List[str]:
+        """Returns the list of registered subjects."""
+        # The _request method already handles the JSON parsing
+        return self._request("/subjects")
+
+    def is_compatible(self, subject: str, schema: Dict[str, Any]) -> bool:
+        """Checks if a schema is compatible with the latest version in the registry."""
+        data = {"schema": json.dumps(schema)}
+        try:
+            result = self._request(
+                f"/compatibility/subjects/{subject}/versions/latest", 
+                method="POST", 
+                data=data
+            )
+            return result.get("is_compatible", False)
+        except SchemaRegistryError:
+            # If the subject doesn't exist yet, it's technically compatible
+            return True
+
+    def set_compatibility(self, subject: str, level: str = "BACKWARD") -> bool:
+        """Sets the compatibility level for a subject."""
+        data = {"compatibility": level}
+        # Path for subject-level config
+        self._request(f"/config/{subject}", method="PUT", data=data)
+        return True
