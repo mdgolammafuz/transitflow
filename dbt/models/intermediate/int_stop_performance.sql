@@ -20,7 +20,7 @@ stop_metrics as (
         avg(delay_at_arrival) as avg_delay_seconds,
         stddev(delay_at_arrival) as stddev_delay_seconds,
         
-        -- Delay Distribution using Macro
+        -- Delay Distribution using centralized Macro
         sum(case when {{ classify_delay('delay_at_arrival') }} = 'on_time' then 1 else 0 end) as on_time_count,
         sum(case when {{ classify_delay('delay_at_arrival') }} = 'delayed' then 1 else 0 end) as delayed_count,
         
