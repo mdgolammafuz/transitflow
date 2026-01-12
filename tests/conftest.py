@@ -1,7 +1,7 @@
 from typing import Any, Dict
-
+from dotenv import load_dotenv
+from pathlib import Path
 import pytest
-
 
 @pytest.fixture
 def sample_enriched_event() -> Dict[str, Any]:
@@ -37,3 +37,16 @@ def env_config(monkeypatch):
     monkeypatch.setenv("POSTGRES_PASSWORD", "transit_secure_local")
     monkeypatch.setenv("POSTGRES_DB", "transit")
     monkeypatch.setenv("POSTGRES_HOST", "postgres")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def load_env():
+    """
+    Automated Industry Practice: 
+    Load infra/.env into the process environment before any tests run.
+    """
+    env_path = Path(__file__).parent.parent / "infra" / "local" / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+    else:
+        pytest.fail(f"CRITICAL: .env file not found at {env_path}")
