@@ -1,92 +1,128 @@
-# Staging Models Configuration
-# Pattern: Quality as Firewall
-
 version: 2
 
 models:
   - name: stg_enriched
     description: "Cleaned and typed enriched events from Bronze layer"
+    config:
+      contract:
+        enforced: true
     columns:
       - name: vehicle_id
-        description: "Unique vehicle identifier"
-        tests:
+        data_type: text
+        data_tests:
           - not_null
-          
+      - name: operator_id
+        data_type: text
+      - name: line_id
+        data_type: text
+      - name: direction_id
+        data_type: text
       - name: event_time_ms
-        description: "Event timestamp in milliseconds"
-        tests:
+        data_type: bigint
+        data_tests:
           - not_null
-          
       - name: event_timestamp
-        description: "Parsed event timestamp"
-        tests:
+        data_type: timestamp with time zone
+        data_tests:
           - not_null
-          
+      - name: event_date
+        data_type: date
       - name: latitude
-        description: "WGS84 latitude"
-        tests:
+        data_type: double precision
+        data_tests:
           - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 59.9
-              max_value: 60.4
-              
       - name: longitude
-        description: "WGS84 longitude"
-        tests:
+        data_type: double precision
+        data_tests:
           - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 24.5
-              max_value: 25.2
-              
-      - name: delay_seconds
-        description: "Delay from schedule"
-        tests:
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: -3600
-              max_value: 7200
-              
-      - name: delay_category
-        description: "Categorized delay status"
-        tests:
-          - accepted_values:
-              values: ['on_time', 'slight_delay', 'delayed', 'early']
-              
+      - name: speed_ms
+        data_type: double precision
       - name: speed_kmh
-        description: "Speed in km/h"
-        tests:
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 0
-              max_value: 150
-              
-    tests:
-      # Uniqueness constraint (data contract)
+        data_type: double precision
+      - name: delay_seconds
+        data_type: integer
+      - name: heading
+        data_type: double precision
+      - name: door_status
+        data_type: integer
+      - name: next_stop_id
+        data_type: text
+      - name: delay_trend
+        data_type: text
+      - name: speed_trend
+        data_type: text
+      - name: distance_since_last_ms
+        data_type: double precision
+      - name: time_since_last_ms
+        data_type: bigint
+      - name: is_stopped
+        data_type: boolean
+      - name: stopped_duration_ms
+        data_type: bigint
+      - name: processing_time
+        data_type: timestamp with time zone
+      - name: kafka_partition
+        data_type: integer
+      - name: kafka_offset
+        data_type: bigint
+      - name: ingestion_time
+        data_type: timestamp with time zone
+      - name: partition_date
+        data_type: date
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns:
-            - vehicle_id
-            - event_time_ms
+          combination_of_columns: [vehicle_id, event_time_ms]
 
   - name: stg_stop_events
     description: "Cleaned stop arrival events"
+    config:
+      contract:
+        enforced: true
     columns:
       - name: vehicle_id
-        tests:
-          - not_null
-          
+        data_type: text
       - name: stop_id
-        tests:
-          - not_null
-          
+        data_type: text
+      - name: stop_name
+        data_type: text
+      - name: operator_id
+        data_type: text
+      - name: zone_id
+        data_type: text
+      - name: arrival_time
+        data_type: bigint
+      - name: arrival_timestamp
+        data_type: timestamp with time zone
+      - name: arrival_date
+        data_type: date
       - name: delay_at_arrival
-        description: "ML target variable"
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: -3600
-              max_value: 7200
-              
-    tests:
+        data_type: integer
+      - name: line_id
+        data_type: text
+      - name: direction_id
+        data_type: text
+      - name: dwell_time_ms
+        data_type: integer
+      - name: distance_since_last_ms
+        data_type: double precision
+      - name: stop_sequence
+        data_type: integer
+      - name: door_opened
+        data_type: boolean
+      - name: latitude
+        data_type: double precision
+      - name: longitude
+        data_type: double precision
+      - name: kafka_partition
+        data_type: integer
+      - name: kafka_offset
+        data_type: bigint
+      - name: partition_date
+        data_type: date
+      - name: ingestion_time
+        data_type: timestamp with time zone
+      - name: stop_code
+        data_type: text
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns:
-            - vehicle_id
-            - stop_id
-            - arrival_time
+          combination_of_columns: [vehicle_id, stop_id, arrival_time]

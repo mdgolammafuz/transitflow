@@ -13,7 +13,7 @@ cleaned as (
         vehicle_id,
         event_time_ms,
         
-        -- Parsed timestamp (Unified casting)
+        -- Parsed timestamps
         to_timestamp(event_time_ms / 1000) as event_timestamp,
         cast(date_trunc('day', to_timestamp(event_time_ms / 1000)) as date) as event_date,
         
@@ -25,7 +25,7 @@ cleaned as (
         coalesce(speed_ms, 0) as speed_ms,
         coalesce(speed_ms, 0) * 3.6 as speed_kmh,
         
-        -- Raw Delay (Categorization moved to Intermediate)
+        -- Raw Delay (Categorization moved to Intermediate/Marts)
         coalesce(delay_seconds, 0) as delay_seconds,
         
         -- Attributes
@@ -39,7 +39,7 @@ cleaned as (
         -- Flink Metrics
         delay_trend,
         speed_trend,
-        distance_since_last_m,
+        distance_since_last_ms,
         time_since_last_ms,
         is_stopped,
         stopped_duration_ms,
@@ -57,7 +57,7 @@ cleaned as (
         and event_time_ms is not null
         and latitude is not null
         and longitude is not null
-        -- Boundary filtering (Quality Firewall)
+        -- Boundary filtering
         and latitude between 59.9 and 60.4
         and longitude between 24.5 and 25.2
         and (delay_seconds is null 
