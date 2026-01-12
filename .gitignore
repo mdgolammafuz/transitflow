@@ -76,3 +76,9 @@ temp/
 flink/target/
 flink/dependency-reduced-pom.xml
 infra/local/flink-jobs/*.jar
+
+# dbt artifacts and local configurations
+dbt/target/
+dbt/dbt_packages/
+dbt/package-lock.yml
+dbt/.user.yml

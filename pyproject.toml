@@ -5,24 +5,34 @@ description = "Real-time delay prediction for public transit"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    # --- Phase 2: Streaming (MQTT/Kafka) ---
     "paho-mqtt>=2.0.0",
     "confluent-kafka>=2.3.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    
+    # --- Phase 3: Processing (Spark/Delta/Redis) ---
+    "redis>=5.0.0",
+    "pyspark==3.5.0",
+    "delta-spark==3.0.0",
+    
+    # --- Phase 4: Warehouse (dbt/Postgres) ---
+    "dbt-core>=1.11.0",
+    "dbt-postgres>=1.9.0",
+    "psycopg2-binary>=2.9.9", 
+    "python-dotenv>=1.0.1",
+    # --- Observability ---
     "prometheus-client>=0.19.0",
     "structlog>=24.0.0",
-    "redis>=5.0.0",          # For Phase 2/3 Feature Store checks
-    "pyspark==3.5.0",        # The "Truck" (Spark)
-    "delta-spark==3.0.0",    # The "Filing Cabinet" (Delta Lake) logic
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
     "black>=24.0.0",
     "ruff>=0.1.0",
-    "pytest-cov>=4.1.0",     # For the coverage goals mentioned in your plan
 ]
 
 [build-system]

@@ -1,10 +1,16 @@
-.PHONY: help dev-up dev-down clean topics setup-test lint test-ingestion test-unit test-all \
-        verify-ingestion verify-stream verify-pipeline run run-full flink-build flink-submit \
+.PHONY: help dev-up dev-down clean topics setup-test lint test-unit test-all \
+        verify-pipeline run run-full flink-build flink-submit \
         spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
-        dbt-run dbt-test dbt-docs schema-register
+        dbt-run dbt-test dbt-docs schema-register schema-check schema-list
 
 # --- Configuration ---
+-include infra/local/.env
+
+# Local connectivity constants
+REGISTRY_URL := $(if $(SCHEMA_REGISTRY_URL),$(SCHEMA_REGISTRY_URL),http://localhost:8081)
 SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4"
+
+# Spark execution wrapper
 SPARK_SUBMIT := docker exec -it spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
@@ -12,73 +18,85 @@ SPARK_SUBMIT := docker exec -it spark-master /usr/bin/env PYTHONPATH=/opt/spark/
   --executor-memory 1G \
   --packages $(SPARK_PKGS)
 
-help:
-	@echo "TransitFlow - Pipeline Control (Security & Clean Code Enforced)"
-	@echo ""
-	@echo "1. Quality & Validation:"
-	@echo "  make lint          Auto-format and check PEP8 (isort, black, flake8)"
-	@echo "  make test-all      Run all Python unit tests (Registry, dbt-contracts, Spark)"
-	@echo "  make verify-pipeline Run the full pipeline integrity check script"
-	@echo ""
-	@echo "2. Infrastructure:"
-	@echo "  make dev-up        Start containers and initialize Kafka topics"
-	@echo "  make dev-down      Stop and remove containers"
-	@echo ""
-	@echo "3. Data Contracts & Registry:"
-	@echo "  make schema-register Register Avro schemas with Schema Registry"
-	@echo "  make dbt-deps        Install dbt dependencies"
-	@echo ""
-	@echo "4. Execution Layers:"
-	@echo "  make run             Run Ingestion Bridge (Line 600)"
-	@echo "  make flink-submit    Submit Enrichment Job to Flink"
-	@echo "  make spark-bronze    Stream: Kafka -> Bronze Delta"
-	@echo "  make dbt-snapshot    Capture SCD Type 2 History (Snapshots)"
-	@echo "  make dbt-run         Execute Transformation Lineage (Staging -> Marts)"
-	@echo "  make dbt-test        Verify Data Contracts (dbt Tests)"
-	@echo ""
-	@echo "5. Documentation & Cleanup:"
-	@echo "  make dbt-docs        Generate and serve data lineage docs"
-	@echo "  make clean           Remove caches, pycache, and build artifacts"
+# Environment propagation for database and registry utilities
+DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
+          POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+          POSTGRES_DB=$(POSTGRES_DB) \
+          POSTGRES_HOST=127.0.0.1 \
+          POSTGRES_PORT=$(POSTGRES_PORT) \
+          SCHEMA_REGISTRY_URL=$(REGISTRY_URL)
 
-# --- Infrastructure ---
+# dbt execution context
+DBT := cd dbt && DBT_PROFILES_DIR=. $(DB_ENV) dbt
+
+help:
+	@echo "TransitFlow - Unified Pipeline Control"
+	@echo ""
+	@echo "Quality & Validation:"
+	@echo "  make lint               Auto-format and check PEP8 compliance"
+	@echo "  make test-all           Run all unit tests (Registry, Contracts, Spark)"
+	@echo "  make verify-pipeline    Run complete end-to-end integrity suite"
+	@echo ""
+	@echo "Infrastructure:"
+	@echo "  make dev-up             Launch containers and initialize environment"
+	@echo "  make dev-down           Stop and remove all local services"
+	@echo "  make topics             Initialize Kafka topics and partitions"
+	@echo ""
+	@echo "Data Contracts & Registry:"
+	@echo "  make schema-register    Sync local schemas with Registry"
+	@echo "  make schema-check       Verify remote schema compatibility"
+	@echo "  make schema-list        List currently registered subjects"
+	@echo ""
+	@echo "Streaming & Ingestion:"
+	@echo "  make run                Run Ingestion Bridge (filtered line 600)"
+	@echo "  make run-full           Run Ingestion Bridge (all traffic)"
+	@echo "  make flink-submit       Deploy enrichment job to Flink cluster"
+	@echo ""
+	@echo "Batch Processing (Spark):"
+	@echo "  make spark-bronze       Stream Kafka data to Delta Lake Bronze"
+	@echo "  make spark-silver       Run Silver-layer cleaning transformations"
+	@echo "  make spark-gold         Execute Gold-layer business aggregations"
+	@echo ""
+	@echo "Warehouse & Transformation (dbt):"
+	@echo "  make dbt-seed           Load static reference data (GTFS)"
+	@echo "  make dbt-snapshot       Execute SCD Type 2 history capture"
+	@echo "  make dbt-run            Run transformation lineage (Staging to Marts)"
+	@echo "  make dbt-test           Execute data contract validation tests"
+	@echo "  make dbt-docs           Generate and serve data catalog/lineage"
+
+# --- Infrastructure Management ---
 dev-up:
 	@if [ ! -f infra/local/.env ]; then cp infra/local/.env.example infra/local/.env; fi
 	cd infra/local && docker compose up -d
+	@echo "Initializing services..."
 	@sleep 15
-	@make topics
+	@$(MAKE) topics
 
 dev-down:
 	cd infra/local && docker compose down
 
 topics:
+	@echo "Creating Kafka topics..."
 	docker exec -it redpanda rpk topic create fleet.telemetry.raw fleet.enriched fleet.stop_events --partitions 8 2>/dev/null || true
 	docker exec -it redpanda rpk topic create fleet.telemetry.dlq --partitions 1 2>/dev/null || true
 
-# --- Quality & Testing (Existing tests preserved) ---
-setup-test:
-	pip install -r requirements-test.txt
-
+# --- Quality Assurance ---
 lint:
 	isort spark/ tests/ src/ scripts/
 	black spark/ tests/ src/ scripts/
 	flake8 spark/ tests/ src/ scripts/
 
-test-ingestion:
-	PYTHONPATH=. pytest tests/unit/ingestion/ -v
-
-test-unit:
-	PYTHONPATH=. pytest tests/unit/spark/ --cov=spark --cov-report=term-missing
-
 test-all:
-	PYTHONPATH=. pytest tests/unit/ -v
+	PYTHONPATH=$(CURDIR) pytest tests/unit/ -v
 
-# --- Ingestion & Streaming ---
+# --- Ingestion Control ---
 run:
-	PYTHONPATH=. python scripts/run_bridge.py --line 600
+	PYTHONPATH=$(CURDIR) python3 scripts/run_bridge.py --line 600
 
 run-full:
-	PYTHONPATH=. python scripts/run_bridge.py
+	PYTHONPATH=$(CURDIR) python3 scripts/run_bridge.py
 
+# --- Streaming Enrichment (Flink) ---
 flink-build:
 	cd flink && mvn clean package -DskipTests
 	@mkdir -p infra/local/flink-jobs
@@ -87,39 +105,7 @@ flink-build:
 flink-submit:
 	docker exec -it flink-jobmanager flink run -d /opt/flink/jobs/transitflow-flink-1.0.0.jar
 
-# --- Schema Registry & dbt (The Restructure) ---
-schema-register:
-	@echo "Enforcing Data Contracts..."
-	PYTHONPATH=. python scripts/register_schemas.py
-
-dbt-deps:
-	cd dbt && dbt deps --profiles-dir .
-
-dbt-seed:
-	cd dbt && dbt seed --profiles-dir .
-
-dbt-snapshot:
-	@echo "Capturing SCD Type 2 History..."
-	cd dbt && dbt snapshot --profiles-dir .
-
-dbt-run:
-	@echo "Executing Transformation Lineage..."
-	cd dbt && dbt run --profiles-dir .
-
-dbt-test:
-	@echo "Validating Data Contracts..."
-	cd dbt && dbt test --profiles-dir .
-
-dbt-docs:
-	cd dbt && dbt docs generate --profiles-dir .
-	cd dbt && dbt docs serve --port 8085 --profiles-dir .
-
-# --- Verification ---
-verify-pipeline:
-	@echo "Running Pipeline Integrity Check..."
-	PYTHONPATH=. python scripts/verify_pipeline.py --check-all
-
-# --- Spark & Delta ---
+# --- Delta Lake Processing (Spark) ---
 spark-bronze:
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all
 
@@ -132,6 +118,44 @@ spark-gold:
 spark-reconcile:
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/reconciliation.py --save
 
+# --- Data Contracts & Warehouse (dbt) ---
+schema-register:
+	@echo "Registering Avro definitions..."
+	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/register_schemas.py
+
+schema-check:
+	@echo "Performing compatibility check..."
+	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/register_schemas.py --check-only
+
+schema-list:
+	@curl -s $(REGISTRY_URL)/subjects | python3 -m json.tool
+
+dbt-deps:
+	$(DBT) deps
+
+dbt-seed:
+	$(DBT) seed
+
+dbt-snapshot:
+	$(DBT) snapshot
+
+dbt-run:
+	$(DBT) run
+
+dbt-test:
+	$(DBT) test
+
+dbt-docs:
+	$(DBT) docs generate
+	@echo "Serving documentation at http://localhost:8085"
+	$(DBT) docs serve --port 8085
+
+# --- Orchestrated Verification ---
+verify-pipeline:
+	@echo "Running end-to-end integrity suite..."
+	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/verify_pipeline.py --check-all
+
+# --- Maintenance ---
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type d -name .pytest_cache -exec rm -rf {} +
