@@ -1,6 +1,6 @@
 /*
     Fact Table: Stop Arrivals
-    Pattern: DE#4 - Semantic Interface
+    Joined with dimensions and historical features.
 */
 
 with stop_events as (
@@ -11,7 +11,6 @@ stop_performance as (
     select * from {{ ref('int_stop_performance') }}
 ),
 
--- Join with dimensions based on the arrival timestamp to preserve historical truth
 stops as (
     select * from {{ ref('dim_stops') }}
 ),
@@ -20,7 +19,7 @@ lines as (
     select * from {{ ref('dim_lines') }}
 ),
 
-enriched as (
+enriched_arrivals as (
     select
         {{ dbt_utils.generate_surrogate_key(['se.vehicle_id', 'se.stop_id', 'se.arrival_time']) }} as arrival_id,
         
@@ -39,7 +38,7 @@ enriched as (
         se.dwell_time_ms,
         se.door_opened,
         
-        -- Denormalized attributes from dimensions
+        -- Dimension attributes (Explicitly sourced from Dimensions)
         s.stop_name,
         s.zone_id,
         l.line_name,
@@ -52,7 +51,6 @@ enriched as (
         sp.arrival_count as historical_arrival_count
         
     from stop_events se
-    -- Snapshot join: finding the record valid at the time of arrival
     left join stops s 
         on se.stop_id = s.stop_id 
         and se.arrival_timestamp >= s.valid_from 
@@ -68,4 +66,4 @@ enriched as (
         and extract(dow from se.arrival_timestamp) = sp.day_of_week
 )
 
-select * from enriched
+select * from enriched_arrivals

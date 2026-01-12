@@ -2,14 +2,14 @@
 
 {{
     config(
-      target_schema='dimensions',
+      target_schema='snapshots',
       unique_key='stop_id',
       strategy='check',
-      check_cols=['stop_name', 'latitude', 'longitude'],
-      invalidate_hard_deletes=True,
+      check_cols=['latitude', 'longitude'],
     )
 }}
 
-select * from {{ ref('stg_stops') }}
+-- CHANGE THIS LINE:
+select * from {{ ref('stg_stop_events') }} 
 
 {% endsnapshot %}

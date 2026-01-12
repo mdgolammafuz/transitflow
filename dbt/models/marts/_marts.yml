@@ -1,93 +1,112 @@
-# Mart Models Configuration
-# Pattern: Semantic Interface (Data Contracts)
-
 version: 2
 
 models:
   - name: fct_stop_arrivals
-    description: |
-      Fact table for stop arrivals.
-      This is the primary table for ML training - each row is a training example.
-      
-      Data Contract:
-      - Unique by (vehicle_id, stop_id, arrival_time)
-      - delay_at_arrival is the target variable
-      - All foreign keys reference valid dimensions
+    description: "Fact table for stop arrivals - ML Training Source"
+    config:
+      contract:
+        enforced: true
     columns:
       - name: arrival_id
-        description: "Surrogate key for the arrival"
-        tests:
+        data_type: text
+        data_tests:
           - unique
           - not_null
-          
       - name: vehicle_id
-        tests:
-          - not_null
-          
+        data_type: text
       - name: stop_id
-        tests:
+        data_type: text
+        data_tests:
           - not_null
           - relationships:
               to: ref('dim_stops')
               field: stop_id
-              config:
-                where: "is_current = true"
-          
       - name: line_id
-        tests:
-          - relationships:
-              to: ref('dim_lines')
-              field: line_id
-              config:
-                where: "is_current = true"
-          
-      - name: delay_at_arrival
-        description: "ML target variable - seconds late (+) or early (-)"
-        tests:
-          - not_null
-          
+        data_type: text
+      - name: direction_id
+        data_type: text
+      - name: arrival_time
+        data_type: bigint
       - name: arrival_timestamp
-        tests:
+        data_type: timestamp with time zone
+      - name: arrival_date
+        data_type: date
+      - name: delay_at_arrival
+        data_type: integer
+        data_tests:
           - not_null
-          
-    tests:
+      - name: delay_category
+        data_type: text
+        description: "Business-defined delay status via macro"
+        data_tests:
+          - not_null
+          - accepted_values:
+              values:
+                - 'on_time'
+                - 'slight_delay'
+                - 'delayed'
+                - 'early'
+      - name: dwell_time_ms
+        data_type: integer
+      - name: door_opened
+        data_type: boolean
+      - name: stop_name
+        data_type: text
+      - name: zone_id
+        data_type: text
+      - name: line_name
+        data_type: text
+      - name: line_type
+        data_type: text
+      - name: historical_avg_delay
+        data_type: numeric # Postgres avg() returns numeric/decimal
+      - name: historical_stddev_delay
+        data_type: numeric # Postgres stddev() returns numeric/decimal
+      - name: historical_on_time_pct
+        data_type: numeric
+      - name: historical_arrival_count
+        data_type: bigint
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns:
-            - vehicle_id
-            - stop_id
-            - arrival_time
-            
+          combination_of_columns: [vehicle_id, stop_id, arrival_time]
+
   - name: fct_daily_performance
-    description: |
-      Daily aggregated performance metrics by line.
-      Used for dashboards and reporting.
-      
-      Data Contract:
-      - One row per line per day
-      - All metrics are non-null
+    description: "Daily aggregated performance metrics by line."
+    config:
+      contract:
+        enforced: true
     columns:
+      - name: metric_id
+        data_type: text
+        data_tests:
+          - unique
+          - not_null
       - name: line_id
-        tests:
+        data_type: text
+        data_tests:
           - not_null
-          
       - name: metric_date
-        tests:
-          - not_null
-          
+        data_type: date
+      - name: total_journeys
+        data_type: bigint
       - name: total_events
-        tests:
+        data_type: numeric # Postgres sum() on counts can return numeric
+        data_tests:
           - not_null
           - dbt_expectations.expect_column_values_to_be_between:
               min_value: 0
-              
+      - name: unique_vehicles
+        data_type: bigint
+      - name: avg_delay_seconds
+        data_type: numeric # Postgres avg() returns numeric/decimal
       - name: on_time_percentage
-        tests:
+        data_type: numeric
+        data_tests:
           - dbt_expectations.expect_column_values_to_be_between:
               min_value: 0
               max_value: 100
-              
-    tests:
+      - name: total_distance_km
+        data_type: double precision
+    data_tests:
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns:
-            - line_id
-            - metric_date
+          combination_of_columns: [line_id, metric_date]

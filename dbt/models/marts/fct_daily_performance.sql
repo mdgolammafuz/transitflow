@@ -22,7 +22,7 @@ daily_metrics as (
         
     from journeys
     where line_id is not null
-    group by 1, 2
+    group by line_id, journey_date
 )
 
 select
