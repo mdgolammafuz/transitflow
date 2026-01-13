@@ -125,7 +125,7 @@ services:
       /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
       "
     volumes:
-      - ../../spark:/opt/spark/jobs/spark
+      - ../../feature_store:/opt/spark/jobs/feature_store
   
   spark-worker:
     image: apache/spark:3.5.0
@@ -143,7 +143,7 @@ services:
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
       "
     volumes:
-      - ../../spark:/opt/spark/jobs/spark
+      - ../../feature_store:/opt/spark/jobs/feature_store
 
   # --- State Storage (MinIO) ---
   minio:
