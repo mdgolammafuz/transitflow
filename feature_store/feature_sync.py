@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 def get_spark_session() -> SparkSession:
     """Create Spark session with Delta Lake and PostgreSQL support."""
-    minio_endpoint = os.environ.get("MINIO_ENDPOINT", "http://localhost:9000")
+    minio_endpoint = os.environ.get("MINIO_ENDPOINT", "http://minio:9000")
     minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
     minio_password = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
 
@@ -44,36 +44,31 @@ def get_spark_session() -> SparkSession:
         .getOrCreate()
     )
 
-
 def read_stop_performance(spark: SparkSession, bucket: str) -> DataFrame:
-    """Read stop performance from Delta Lake Gold layer."""
     gold_path = f"s3a://{bucket}/gold/stop_performance"
-    logger.info("Reading stop performance from %s", gold_path)
-
     df = spark.read.format("delta").load(gold_path)
 
+    # STRICT MAPPING + NULL HANDLING
     return df.select(
-        F.col("stop_id").cast("int"),
+        F.col("stop_id").cast("string"),
         F.col("hour_of_day").cast("int"),
         F.col("day_of_week").cast("int"),
-        F.col("avg_delay_seconds").cast("float"),
-        F.col("stddev_delay_seconds").cast("float"),
-        # Convert ms to seconds for consistency with offline store schema
+        F.col("avg_delay").cast("float").alias("avg_delay_seconds"),
+        F.lit(0.0).cast("float").alias("stddev_delay_seconds"),
         (F.col("avg_dwell_time_ms").cast("float") / 1000).alias("avg_dwell_time_seconds"),
-        F.col("p90_delay_seconds").cast("float"),
-        F.col("sample_count").cast("int"),
-    )
-
+        F.lit(0.0).cast("float").alias("p90_delay_seconds"),
+        F.col("arrival_count").cast("int").alias("sample_count")
+    ).na.fill(0.0) # This replaces any nulls with 0.0 before writing to Postgres
 
 def write_to_postgres(df: DataFrame, computed_date: str) -> int:
     """Write features to PostgreSQL using staging and upsert logic."""
     df_with_date = df.withColumn("computed_date", F.lit(computed_date))
     
-    host = os.environ.get("POSTGRES_HOST", "localhost")
+    host = os.environ.get("POSTGRES_HOST", "postgres")
     port = os.environ.get("POSTGRES_PORT", "5432")
     db = os.environ.get("POSTGRES_DB", "transit")
     user = os.environ.get("POSTGRES_USER", "transit")
-    password = os.environ.get("POSTGRES_PASSWORD", "")
+    password = os.environ.get("POSTGRES_PASSWORD", "transit_secure_local")
     
     jdbc_url = f"jdbc:postgresql://{host}:{port}/{db}"
     properties = {
@@ -83,12 +78,12 @@ def write_to_postgres(df: DataFrame, computed_date: str) -> int:
     }
 
     temp_table = "features.stop_historical_staging"
-    logger.info("Writing batch to staging table: %s", temp_table)
+    logger.info("Writing batch to staging table via JDBC: %s", temp_table)
 
-    # 1. Overwrite staging table with current batch
+    # 1. Overwrite staging table
     df_with_date.write.jdbc(url=jdbc_url, table=temp_table, mode="overwrite", properties=properties)
 
-    # 2. Execute Upsert from staging to production
+    # 2. Execute Upsert with explicit casting for computed_date
     upsert_sql = f"""
         INSERT INTO features.stop_historical (
             stop_id, hour_of_day, day_of_week,
@@ -96,18 +91,25 @@ def write_to_postgres(df: DataFrame, computed_date: str) -> int:
             avg_dwell_time_seconds, p90_delay_seconds,
             sample_count, computed_date
         )
-        SELECT * FROM {temp_table}
-        ON CONFLICT (stop_id, hour_of_day, day_of_week, computed_date)
+        SELECT 
+            stop_id, hour_of_day, day_of_week,
+            avg_delay_seconds, stddev_delay_seconds,
+            avg_dwell_time_seconds, p90_delay_seconds,
+            sample_count,
+            computed_date::DATE  -- Explicit cast from TEXT to DATE
+        FROM {temp_table}
+        ON CONFLICT (stop_id, hour_of_day, day_of_week)
         DO UPDATE SET
             avg_delay_seconds = EXCLUDED.avg_delay_seconds,
             stddev_delay_seconds = EXCLUDED.stddev_delay_seconds,
             avg_dwell_time_seconds = EXCLUDED.avg_dwell_time_seconds,
             p90_delay_seconds = EXCLUDED.p90_delay_seconds,
-            sample_count = EXCLUDED.sample_count
+            sample_count = EXCLUDED.sample_count,
+            computed_date = EXCLUDED.computed_date;
     """
     
-    # Execution using a temporary JDBC connection
     import psycopg2
+    logger.info("Executing Upsert on production table: features.stop_historical")
     conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=db)
     try:
         with conn.cursor() as cur:
@@ -117,7 +119,7 @@ def write_to_postgres(df: DataFrame, computed_date: str) -> int:
         conn.close()
 
     row_count = df.count()
-    logger.info("Synced %d rows to production features table", row_count)
+    logger.info("Successfully synced %d rows to production features table", row_count)
     return row_count
 
 
