@@ -2,16 +2,6 @@
 Feature Store API - FastAPI Application.
 
 Pattern: Semantic Interface
-
-Provides REST API for feature access:
-- GET /features/{vehicle_id} - Get combined features
-- GET /health - Health check
-- GET /metrics - Service metrics
-
-The Feature API is the semantic interface for ML consumers. It abstracts
-away the complexity of dual-store architecture. Clients ask for
-features by vehicle_id, and the service handles combining real-time
-Redis data with historical PostgreSQL aggregates.
 """
 
 import logging
@@ -21,7 +11,7 @@ from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from feature_store.config import FeatureStoreConfig
 from feature_store.feature_service import FeatureService
@@ -87,7 +77,7 @@ class OnlineFeaturesResponse(BaseModel):
 
 class OfflineFeaturesResponse(BaseModel):
     """Offline features from PostgreSQL."""
-    stop_id: int
+    stop_id: str  # Changed from int to str
     line_id: str
     hour_of_day: int
     day_of_week: int
@@ -107,24 +97,6 @@ class CombinedFeaturesResponse(BaseModel):
     online_features: Optional[OnlineFeaturesResponse] = None
     offline_features: Optional[OfflineFeaturesResponse] = None
     latency_ms: float
-
-
-class FeatureVectorResponse(BaseModel):
-    """Flat feature vector for ML model."""
-    vehicle_id: int
-    current_delay: int
-    delay_trend: float
-    current_speed: float
-    speed_trend: float
-    is_stopped: int
-    stopped_duration_ms: int
-    latitude: float
-    longitude: float
-    feature_age_ms: int
-    historical_avg_delay: float
-    historical_stddev_delay: float
-    historical_p90_delay: float
-    historical_sample_count: int
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -148,16 +120,14 @@ async def health_check():
 @app.get("/features/{vehicle_id}", response_model=CombinedFeaturesResponse)
 async def get_features(
     vehicle_id: int,
-    stop_id: Optional[int] = Query(None, description="Stop ID for offline features"),
+    # stop_id must be str to match DB VARCHAR and prevent casting errors
+    stop_id: Optional[str] = Query(None, description="Stop ID for offline features"),
     line_id: Optional[str] = Query(None, description="Line ID for offline features"),
     hour_of_day: Optional[int] = Query(None, ge=0, le=23, description="Hour (0-23)"),
-    day_of_week: Optional[int] = Query(None, ge=0, le=6, description="Day (0=Mon)"),
+    day_of_week: Optional[int] = Query(None, ge=1, le=7, description="Day (1=Mon, 7=Sun)"),
 ):
     """
     Get combined features for a vehicle.
-    
-    Returns both online (real-time from Redis) and offline (historical from 
-    PostgreSQL) features when available.
     """
     if not feature_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
@@ -191,31 +161,6 @@ async def get_features(
     return JSONResponse(content=response)
 
 
-@app.get("/features/{vehicle_id}/vector", response_model=FeatureVectorResponse)
-async def get_feature_vector(
-    vehicle_id: int,
-    stop_id: Optional[int] = Query(None),
-    line_id: Optional[str] = Query(None),
-    hour_of_day: Optional[int] = Query(None, ge=0, le=23),
-    day_of_week: Optional[int] = Query(None, ge=0, le=6),
-):
-    """
-    Get flat feature vector for ML model.
-    """
-    if not feature_service:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
-    combined = feature_service.get_features(
-        vehicle_id=vehicle_id,
-        stop_id=stop_id,
-        line_id=line_id,
-        hour_of_day=hour_of_day,
-        day_of_week=day_of_week,
-    )
-
-    return JSONResponse(content=combined.to_feature_vector())
-
-
 @app.get("/metrics")
 async def get_metrics():
     """Get service metrics for monitoring."""
@@ -240,16 +185,6 @@ async def get_metrics():
             "hit_rate": round(metrics.offline_hit_rate, 3),
         },
     }
-
-
-@app.post("/metrics/reset")
-async def reset_metrics():
-    """Reset metrics counters."""
-    if not feature_service:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
-    feature_service.reset_metrics()
-    return {"status": "ok", "message": "Metrics reset"}
 
 
 if __name__ == "__main__":
