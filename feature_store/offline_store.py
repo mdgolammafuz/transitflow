@@ -3,14 +3,14 @@ Offline Feature Store - PostgreSQL.
 
 Pattern: 
 Semantic Interface
-ML Reproducibility
+Robust Feature Serving
 
 Historical aggregated features from dbt marts used to provide context 
 to real-time predictions.
 """
 
 import logging
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any
 from dataclasses import dataclass
 from contextlib import contextmanager
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class StopFeatures:
     """Historical features for a stop at a specific time context."""
-    stop_id: int
+    stop_id: str
     line_id: str
     hour_of_day: int
     day_of_week: int
@@ -104,11 +104,14 @@ class OfflineStore:
 
     def get_stop_features(
         self,
-        stop_id: int,
+        stop_id: str,
         hour_of_day: int,
         day_of_week: int,
     ) -> Optional[StopFeatures]:
-        """Fetch the most recent historical aggregates for a stop context."""
+        """
+        Fetch historical aggregates for a stop context.
+        Strategy: Prioritize exact hour match, fallback to latest computed data for the stop.
+        """
         query = """
             SELECT 
                 stop_id, hour_of_day, day_of_week,
@@ -116,20 +119,24 @@ class OfflineStore:
                 avg_dwell_time_seconds, p90_delay_seconds,
                 sample_count
             FROM features.stop_historical
-            WHERE stop_id = %s AND hour_of_day = %s AND day_of_week = %s
-            ORDER BY computed_date DESC
+            WHERE stop_id = %s
+            ORDER BY 
+                (hour_of_day = %s AND day_of_week = %s) DESC, 
+                computed_date DESC,
+                hour_of_day DESC
             LIMIT 1
         """
         try:
             with self._cursor() as cur:
-                cur.execute(query, (stop_id, hour_of_day, day_of_week))
+                cur.execute(query, (str(stop_id), hour_of_day, day_of_week))
                 row = cur.fetchone()
+                
                 if not row:
                     return None
                 
                 return StopFeatures(
-                    stop_id=row["stop_id"],
-                    line_id="", # Line ID usually comes from the Online record
+                    stop_id=str(row["stop_id"]),
+                    line_id="", 
                     hour_of_day=row["hour_of_day"],
                     day_of_week=row["day_of_week"],
                     avg_delay_seconds=float(row["avg_delay_seconds"]),
@@ -138,21 +145,6 @@ class OfflineStore:
                     p90_delay_seconds=float(row["p90_delay_seconds"]),
                     sample_count=int(row["sample_count"])
                 )
-        except DatabaseError as e:
-            logger.error("PostgreSQL fetch error for stop %d: %s", stop_id, e)
+        except Exception as e:
+            logger.error(f"PostgreSQL fetch error for stop {stop_id}: {e}")
             raise
-
-    def get_line_average_delay(self) -> Optional[float]:
-        """Fallback: Get global line average delay for the last week."""
-        query = """
-            SELECT AVG(avg_delay_seconds) as avg_delay
-            FROM features.stop_historical
-            WHERE computed_date >= CURRENT_DATE - INTERVAL '7 days'
-        """
-        try:
-            with self._cursor() as cur:
-                cur.execute(query)
-                row = cur.fetchone()
-                return float(row["avg_delay"]) if row and row["avg_delay"] else None
-        except DatabaseError:
-            return None
