@@ -46,11 +46,13 @@ class MetricsConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="METRICS_")
 
     enabled: bool = Field(default=True)
-    port: int = Field(default=8000)
+    # Changed default to 9091 to prevent collision with Feature API (8000)
+    port: int = Field(default=9091)
 
 
 class Settings(BaseSettings):
     """Root settings."""
+    # This prefix means Pydantic looks for APP_KAFKA_..., APP_METRICS_..., etc.
     model_config = SettingsConfigDict(env_prefix="APP_")
 
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
