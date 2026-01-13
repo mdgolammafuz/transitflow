@@ -113,8 +113,11 @@ class Bridge:
         
         # Start metrics server
         if self.settings.metrics.enabled:
-            self.metrics.start_server(self.settings.metrics.port)
-            logger.info("Metrics server started on port %d", self.settings.metrics.port)
+            # Explicitly log the port value from the settings object
+            target_port = self.settings.metrics.port
+            logger.info("Attempting to start metrics server on port %d", target_port)
+            self.metrics.start_server(target_port)
+            logger.info("Metrics server successfully started on port %d", target_port)
         
         # Start stats updater thread
         stats_thread = threading.Thread(target=self._update_stats, daemon=True)
