@@ -66,11 +66,13 @@ class OnlineStore:
         self._connected = False
 
     def connect(self) -> None:
-        """Establish Redis connection with timeouts."""
+        """Establish Redis connection with timeouts and authentication."""
         try:
+            # Added password argument to enable authentication
             self._client = redis.Redis(
                 host=self._config.redis_host,
                 port=self._config.redis_port,
+                password=self._config.redis_password,
                 decode_responses=True,
                 socket_timeout=self._config.request_timeout_seconds,
                 socket_connect_timeout=self._config.request_timeout_seconds,
