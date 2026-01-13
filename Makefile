@@ -11,28 +11,42 @@
 REGISTRY_URL := $(if $(SCHEMA_REGISTRY_URL),$(SCHEMA_REGISTRY_URL),http://localhost:8081)
 SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.6.0"
 
-# Spark execution wrapper
-SPARK_SUBMIT := docker exec -it spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
+# --- Environment Contexts ---
+
+# LOCAL_ENV: For tools running directly on your Mac (dbt, API, Scripts)
+# Overrides host to 127.0.0.1 to communicate with Docker-mapped ports
+LOCAL_ENV := POSTGRES_USER=$(POSTGRES_USER) \
+             POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+             POSTGRES_DB=$(POSTGRES_DB) \
+             POSTGRES_HOST=127.0.0.1 \
+             POSTGRES_PORT=$(POSTGRES_PORT) \
+             REDIS_HOST=127.0.0.1 \
+             REDIS_PORT=$(REDIS_PORT) \
+             SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
+             FEATURE_API_URL=http://localhost:8000 \
+						 REDIS_PASSWORD=$(REDIS_PASSWORD)
+
+# DB_ENV: For tools running inside Docker (Spark)
+# Uses the service names (e.g., POSTGRES_HOST=postgres) defined in .env
+DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
+          POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+          POSTGRES_DB=$(POSTGRES_DB) \
+          POSTGRES_HOST=$(POSTGRES_HOST) \
+          POSTGRES_PORT=$(POSTGRES_PORT) \
+          SCHEMA_REGISTRY_URL=$(REGISTRY_URL)
+
+# dbt execution context (Mac-based)
+DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
+
+# Spark execution wrapper (Container-based)
+# Add --env-file to the docker exec command
+SPARK_SUBMIT := docker exec -it --env-file infra/local/.env spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
   --total-executor-cores 1 \
   --executor-memory 1G \
   --packages $(SPARK_PKGS)
-
-# Environment propagation for database, registry, and feature store utilities
-DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
-          POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
-          POSTGRES_DB=$(POSTGRES_DB) \
-          POSTGRES_HOST=127.0.0.1 \
-          POSTGRES_PORT=$(POSTGRES_PORT) \
-          REDIS_HOST=127.0.0.1 \
-          REDIS_PORT=6379 \
-          SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
-          FEATURE_API_URL=http://localhost:8000
-
-# dbt execution context
-DBT := cd dbt && DBT_PROFILES_DIR=. $(DB_ENV) dbt
-
+	
 help:
 	@echo "TransitFlow - Unified Pipeline Control"
 	@echo ""
@@ -131,11 +145,11 @@ spark-reconcile:
 # --- Data Contracts & Warehouse (dbt) ---
 schema-register:
 	@echo "Registering Avro definitions..."
-	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/register_schemas.py
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/register_schemas.py
 
 schema-check:
 	@echo "Performing compatibility check..."
-	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/register_schemas.py --check-only
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/register_schemas.py --check-only
 
 schema-list:
 	@curl -s $(REGISTRY_URL)/subjects | python3 -m json.tool
@@ -162,13 +176,13 @@ dbt-docs:
 
 # --- Feature Store & ML Serving ---
 feature-api:
-	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 feature_store/api.py
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 feature_store/api.py
 
 feature-sync:
 	$(SPARK_SUBMIT) /opt/spark/jobs/feature_store/feature_sync.py
 
 feature-verify:
-	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/verify_feature_store.py --check-all
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_feature_store.py --check-all
 
 feature-test:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/feature_store/ -v
@@ -176,7 +190,7 @@ feature-test:
 # --- Orchestrated Verification ---
 verify-pipeline:
 	@echo "Running end-to-end integrity suite..."
-	PYTHONPATH=$(CURDIR) $(DB_ENV) python3 scripts/verify_pipeline.py --check-all
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_pipeline.py --check-all
 
 # --- Maintenance ---
 clean:
