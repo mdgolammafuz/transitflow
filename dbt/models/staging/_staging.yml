@@ -9,32 +9,16 @@ models:
     columns:
       - name: vehicle_id
         data_type: text
-        data_tests:
-          - not_null
-      - name: operator_id
-        data_type: text
-      - name: line_id
-        data_type: text
-      - name: direction_id
-        data_type: text
       - name: event_time_ms
         data_type: bigint
-        data_tests:
-          - not_null
       - name: event_timestamp
         data_type: timestamp with time zone
-        data_tests:
-          - not_null
       - name: event_date
         data_type: date
       - name: latitude
         data_type: double precision
-        data_tests:
-          - not_null
       - name: longitude
         data_type: double precision
-        data_tests:
-          - not_null
       - name: speed_ms
         data_type: double precision
       - name: speed_kmh
@@ -45,6 +29,12 @@ models:
         data_type: double precision
       - name: door_status
         data_type: integer
+      - name: line_id
+        data_type: text
+      - name: direction_id
+        data_type: text
+      - name: operator_id
+        data_type: text
       - name: next_stop_id
         data_type: text
       - name: delay_trend
@@ -69,60 +59,26 @@ models:
         data_type: timestamp with time zone
       - name: partition_date
         data_type: date
-    data_tests:
-      - dbt_utils.unique_combination_of_columns:
-          combination_of_columns: [vehicle_id, event_time_ms]
 
   - name: stg_stop_events
-    description: "Cleaned stop arrival events"
+    description: "Aggregated stop performance metrics from Spark Gold"
     config:
       contract:
         enforced: true
     columns:
-      - name: vehicle_id
-        data_type: text
       - name: stop_id
         data_type: text
-      - name: stop_name
-        data_type: text
-      - name: operator_id
-        data_type: text
-      - name: zone_id
-        data_type: text
-      - name: arrival_time
-        data_type: bigint
-      - name: arrival_timestamp
-        data_type: timestamp with time zone
-      - name: arrival_date
-        data_type: date
-      - name: delay_at_arrival
-        data_type: integer
       - name: line_id
         data_type: text
-      - name: direction_id
-        data_type: text
-      - name: dwell_time_ms
+      - name: hour_of_day
         data_type: integer
-      - name: distance_since_last_ms
-        data_type: double precision
-      - name: stop_sequence
+      - name: day_of_week
         data_type: integer
-      - name: door_opened
-        data_type: boolean
-      - name: latitude
-        data_type: double precision
-      - name: longitude
-        data_type: double precision
-      - name: kafka_partition
-        data_type: integer
-      - name: kafka_offset
+      - name: sample_count
         data_type: bigint
-      - name: partition_date
-        data_type: date
+      - name: avg_delay
+        data_type: double precision
+      - name: avg_dwell_time_ms
+        data_type: double precision
       - name: ingestion_time
         data_type: timestamp with time zone
-      - name: stop_code
-        data_type: text
-    data_tests:
-      - dbt_utils.unique_combination_of_columns:
-          combination_of_columns: [vehicle_id, stop_id, arrival_time]

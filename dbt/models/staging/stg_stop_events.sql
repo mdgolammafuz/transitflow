@@ -1,36 +1,35 @@
+/*
+    Staging: Stop Events (Aggregated)
+    This model aligns the Spark Gold JDBC sink with dbt's enforced contract.
+    Source: public.fct_stop_arrivals (Spark Sink)
+*/
+
 with source as (
-    select * from {{ source('bronze', 'stop_events') }}
+    -- Reading from the Spark Sink in the public schema
+    select * from {{ source('raw_lakehouse', 'fct_stop_arrivals') }}
 ),
 
 cleaned as (
     select
-        vehicle_id,
-        stop_id,
-        stop_code,
-        stop_name,
-        zone_id,
-        operator_id,
-        line_id,
-        direction_id,
-        arrival_time,
-        to_timestamp(arrival_time / 1000) as arrival_timestamp,
-        cast(date_trunc('day', to_timestamp(arrival_time / 1000)) as date) as arrival_date,
-        delay_at_arrival,
-        dwell_time_ms,
-        distance_since_last_ms,
-        stop_sequence,
-        door_opened,
-        latitude,
-        longitude,
-        kafka_partition,
-        kafka_offset,
-        ingestion_time,
-        date as partition_date
+        -- Casting stop_id to text to match the dimension and contract requirements
+        cast(stop_id as text) as stop_id,
+        cast(line_id as text) as line_id,
+        
+        -- Time-based dimensions from Spark groupBy
+        cast(hour_of_day as integer) as hour_of_day,
+        cast(day_of_week as integer) as day_of_week,
+        
+        -- Aggregated metrics
+        cast(arrival_count as bigint) as sample_count,
+        cast(avg_delay as double precision) as avg_delay,
+        cast(avg_dwell_time_ms as double precision) as avg_dwell_time_ms,
+        
+        -- Metadata
+        cast(current_timestamp as timestamp with time zone) as ingestion_time
+        
     from source
-    where vehicle_id is not null
-      and stop_id is not null
-      and arrival_time is not null
-      and delay_at_arrival between {{ var('min_delay_seconds') }} and {{ var('max_delay_seconds') }}
+    where stop_id is not null
+      and line_id is not null
 )
 
 select * from cleaned

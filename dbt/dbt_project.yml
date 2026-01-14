@@ -1,5 +1,5 @@
 # TransitFlow dbt Project
-# Pattern: Semantic Interface
+# Pattern: Semantic Interface - Unified Serving Layer
 
 name: 'transitflow'
 version: '1.0.0'
@@ -19,30 +19,30 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
-# Model configurations
+# Model configurations: Defining the layers of the Helsinki Trace
 models:
   transitflow:
-    # Staging: clean and type-cast source data
+    # Staging: Firewall layer - lightweight views
     staging:
       +materialized: view
       +schema: staging
       
-    # Intermediate: business logic transformations
+    # Intermediate: Sessionization and metric logic
     intermediate:
       +materialized: view
       +schema: intermediate
       
-    # Dimensions: SCD Type 2 slowly changing dimensions
+    # Dimensions: SCD Type 2 tracking (Line/Stop metadata)
     dimensions:
       +materialized: table
       +schema: dimensions
       
-    # Marts: fact tables for downstream consumption
+    # Marts: The Feature Store - high-performance tables for API
     marts:
       +materialized: table
       +schema: marts
 
-# Seed configurations
+# Seed configurations: GTFS Static Data
 seeds:
   transitflow:
     +schema: reference
@@ -52,15 +52,15 @@ tests:
   +severity: error
   +store_failures: true
 
-# Variables
+# Global Variables used across the Spark and dbt pipeline
 vars:
-  # Delay thresholds (seconds)
+  # Delay thresholds (seconds) for the classify_delay macro
   on_time_threshold: 60
   delayed_threshold: 300
   
-  # Data quality thresholds
+  # Data quality thresholds for the stg_enriched "firewall"
   max_delay_seconds: 7200      # 2 hours
   min_delay_seconds: -3600     # 1 hour early
   
-  # SCD Type 2 sentinel date
-  scd_end_date: '9999-12-31'
+  # SCD Type 2 sentinel date - Aligned with Postgres Timestamp format
+  scd_end_date: '2099-12-31 23:59:59'
