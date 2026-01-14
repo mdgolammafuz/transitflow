@@ -5,6 +5,7 @@
         feature-api feature-sync feature-verify feature-test
 
 # --- Configuration ---
+# Loads credentials and service names from infra/local/.env
 -include infra/local/.env
 
 # Local connectivity constants
@@ -14,20 +15,20 @@ SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-
 # --- Environment Contexts ---
 
 # LOCAL_ENV: For tools running directly on your Mac (dbt, API, Scripts)
-# Overrides host to 127.0.0.1 to communicate with Docker-mapped ports
+# Hardened: Explicitly passes credentials to handle Redis/Postgres authentication
 LOCAL_ENV := POSTGRES_USER=$(POSTGRES_USER) \
              POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
              POSTGRES_DB=$(POSTGRES_DB) \
              POSTGRES_HOST=127.0.0.1 \
              POSTGRES_PORT=$(POSTGRES_PORT) \
+             POSTGRES_SCHEMA=marts \
              REDIS_HOST=127.0.0.1 \
              REDIS_PORT=$(REDIS_PORT) \
+             REDIS_PASSWORD=$(REDIS_PASSWORD) \
              SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
-             FEATURE_API_URL=http://localhost:8000 \
-						 REDIS_PASSWORD=$(REDIS_PASSWORD)
+             FEATURE_API_URL=http://localhost:8000
 
 # DB_ENV: For tools running inside Docker (Spark)
-# Uses the service names (e.g., POSTGRES_HOST=postgres) defined in .env
 DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
           POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
           POSTGRES_DB=$(POSTGRES_DB) \
@@ -39,14 +40,13 @@ DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
 DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
 
 # Spark execution wrapper (Container-based)
-# Add --env-file to the docker exec command
 SPARK_SUBMIT := docker exec -it --env-file infra/local/.env spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
   --total-executor-cores 1 \
-  --executor-memory 1G \
+  --executor-memory 512M \
   --packages $(SPARK_PKGS)
-	
+  
 help:
 	@echo "TransitFlow - Unified Pipeline Control"
 	@echo ""
@@ -84,7 +84,7 @@ help:
 	@echo ""
 	@echo "Feature Store & ML Serving:"
 	@echo "  make feature-api        Launch FastAPI Feature Serving API"
-	@echo "  make feature-sync       Sync dbt Gold Marts to PostgreSQL Feature Store"
+	@echo "  make feature-sync       Sync Delta Lake Gold to PostgreSQL Marts"
 	@echo "  make feature-verify     Run Feature Store integration verification"
 	@echo "  make feature-test       Run Feature Store unit tests"
 
@@ -175,9 +175,11 @@ dbt-docs:
 	$(DBT) docs serve --port 8085
 
 # --- Feature Store & ML Serving ---
+# Hardened: Uses LOCAL_ENV to ensure API can connect to Redis/Postgres with correct passwords
 feature-api:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 feature_store/api.py
 
+# Sync Gold Marts from Delta Lake to PostgreSQL
 feature-sync:
 	$(SPARK_SUBMIT) /opt/spark/jobs/feature_store/feature_sync.py
 
@@ -191,6 +193,10 @@ feature-test:
 verify-pipeline:
 	@echo "Running end-to-end integrity suite..."
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_pipeline.py --check-all
+
+# --- Storage & Lakehouse Utilities ---
+lakehouse-ls:
+	@docker exec -it minio sh -c "mc alias set myminio http://localhost:9000 minioadmin minioadmin > /dev/null && mc ls -r myminio/transitflow-lakehouse/"
 
 # --- Maintenance ---
 clean:

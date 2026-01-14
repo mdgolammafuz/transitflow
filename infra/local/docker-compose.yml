@@ -27,12 +27,11 @@ services:
       - --check=false
       - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
       - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
-      # NEW: Explicitly enable Schema Registry on all interfaces
       - --schema-registry-addr 0.0.0.0:8081
     ports:
       - "9092:9092"
       - "9644:9644"
-      - "8081:8081" # NEW: Schema Registry Port
+      - "8081:8081"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -46,7 +45,6 @@ services:
     container_name: redpanda-console
     environment:
       KAFKA_BROKERS: redpanda:29092
-      # NEW: Console needs to know about Schema Registry
       SCHEMA_REGISTRY_ENABLED: "true"
       SCHEMA_REGISTRY_URLS: http://redpanda:8081
     ports:
@@ -114,19 +112,14 @@ services:
     environment:
       <<: *app-env
       SPARK_LOCAL_IP: spark-master
-      SPARK_DAEMON_MEMORY: 512m 
     ports:
       - "8083:8080"
       - "7077:7077"
-      - "4040:4040"
-    command: >
-      /bin/sh -c "
-      pip install --no-cache-dir psycopg2-binary;
-      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
-      "
+    # Clean startup command - no shell logic
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     volumes:
-      - ../../feature_store:/opt/spark/jobs/feature_store
-  
+      - ../../spark:/opt/spark/jobs/spark
+
   spark-worker:
     image: apache/spark:3.5.0
     container_name: spark-worker
@@ -135,17 +128,12 @@ services:
       <<: *app-env
       SPARK_LOCAL_IP: spark-worker
       SPARK_WORKER_CORES: 2
-      SPARK_WORKER_MEMORY: 1536m
-      SPARK_DAEMON_MEMORY: 512m
-    command: >
-      /bin/sh -c "
-      pip install --no-cache-dir psycopg2-binary;
-      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
-      "
+      SPARK_WORKER_MEMORY: 2G
+    # Clean startup command pointing to the master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     volumes:
-      - ../../feature_store:/opt/spark/jobs/feature_store
-
-  # --- State Storage (MinIO) ---
+      - ../../spark:/opt/spark/jobs/spark
+# Storage
   minio:
     image: minio/minio:RELEASE.2024-01-13T07-53-03Z
     container_name: minio
@@ -170,15 +158,15 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    # This environment variable creates the 'myminio' alias automatically
+    environment:
+      MC_HOST_myminio: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
     entrypoint: >
       /bin/sh -c "
-      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
-      mc mb myminio/flink-checkpoints --ignore-existing;
       mc mb myminio/transitflow-lakehouse --ignore-existing;
+      mc policy set public myminio/transitflow-lakehouse;
       exit 0;
       "
-
-  # --- Databases ---
   postgres:
     image: postgres:15-alpine
     container_name: postgres
@@ -211,21 +199,18 @@ services:
       timeout: 5s
       retries: 3
 
-  # --- Data Transformation (dbt) ---
   dbt:
     image: python:3.10-slim
     container_name: dbt
     working_dir: /usr/app
     environment:
       <<: *app-env
-      # Specific dbt env vars can go here if needed
     volumes:
-      - ../../:/usr/app  # Mount root so we see dbt/ folder
-    command: tail -f /dev/null # Keep alive for manual execution
+      - ../../:/usr/app
+    command: tail -f /dev/null
     networks:
       - default
 
-  # --- Observability ---
   prometheus:
     image: prom/prometheus:v2.49.1
     container_name: prometheus

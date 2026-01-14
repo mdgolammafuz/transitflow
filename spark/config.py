@@ -44,11 +44,16 @@ class SparkConfig:
 
     def __post_init__(self):
         """Construct logic-based paths after initialization."""
+        # Define the base URI with the S3A protocol
         base = f"s3a://{self.lakehouse_bucket}"
+        
+        # Structure the medallion layers
         self.bronze_path = f"{base}/bronze"
         self.silver_path = f"{base}/silver"
         self.gold_path = f"{base}/gold"
-        self.checkpoint_base = f"{base}/_checkpoints/spark"
+        
+        # Shallow checkpoint directory for easier cleanup
+        self.checkpoint_base = f"{base}/_checkpoints"
 
     def get_checkpoint_path(self, stream_name: str) -> str:
         """Returns a unique checkpoint directory for a specific stream."""
@@ -68,7 +73,10 @@ def load_config() -> SparkConfig:
         return os.environ.get(key, default)
 
     def get_int(key: str, default: int) -> int:
-        return int(os.environ.get(key, str(default)))
+        try:
+            return int(os.environ.get(key, str(default)))
+        except ValueError:
+            return default
 
     # Required variables
     minio_user = get_required("MINIO_ROOT_USER")
@@ -104,9 +112,8 @@ def load_config() -> SparkConfig:
 
 
 def create_spark_session(app_name: str):
-    """Create Spark session with required S3A and Delta connectors."""
+    """Initializes Spark Session with optimized S3A and Delta settings."""
     from pyspark.sql import SparkSession
-
     config = load_config()
 
     return (
@@ -115,19 +122,30 @@ def create_spark_session(app_name: str):
             "spark.jars.packages",
             "io.delta:delta-spark_2.12:3.0.0,"
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
-            "org.apache.hadoop:hadoop-aws:3.3.4",
+            "org.apache.hadoop:hadoop-aws:3.3.4,"
+            "org.postgresql:postgresql:42.6.0"
         )
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
-            "spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+            "spark.sql.catalog.spark_catalog", 
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog"
         )
+        # --- S3A Connectivity & Auth ---
         .config("spark.hadoop.fs.s3a.endpoint", config.minio_endpoint)
         .config("spark.hadoop.fs.s3a.access.key", config.minio_access_key)
         .config("spark.hadoop.fs.s3a.secret.key", config.minio_secret_key)
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider", 
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
+        )
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        .config("spark.databricks.delta.schema.autoMerge.enabled", "true")
-        .config("spark.databricks.delta.optimizeWrite.enabled", "true")
+        
+        # --- Delta Lake Storage Reliability ---
+        .config(
+            "spark.delta.logStore.class", 
+            "org.apache.spark.sql.delta.storage.S3SingleDriverLogStore"
+        )
         .getOrCreate()
     )
