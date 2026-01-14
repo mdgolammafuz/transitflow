@@ -1,12 +1,6 @@
 """
 Offline Feature Store - PostgreSQL.
-
-Pattern: 
-Semantic Interface
-Robust Feature Serving
-
-Historical aggregated features from dbt marts used to provide context 
-to real-time predictions.
+Hardened: Explicit schema search path and nearest-hour fallback.
 """
 
 import logging
@@ -37,7 +31,6 @@ class StopFeatures:
     sample_count: int
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API response."""
         return {
             "stop_id": self.stop_id,
             "line_id": self.line_id,
@@ -59,7 +52,7 @@ class OfflineStore:
         self._conn: Optional[psycopg2.extensions.connection] = None
 
     def connect(self) -> None:
-        """Establish PostgreSQL connection with timeout."""
+        """Establish connection and force search_path to dbt marts."""
         try:
             self._conn = psycopg2.connect(
                 host=self._config.postgres_host,
@@ -70,18 +63,21 @@ class OfflineStore:
                 connect_timeout=max(2, int(self._config.request_timeout_seconds)),
             )
             self._conn.autocommit = True
-            logger.info("Connected to PostgreSQL (Offline Store)")
+            
+            # CRITICAL: Force the connection to see the dbt schema
+            with self._conn.cursor() as cur:
+                cur.execute(f"SET search_path TO {self._config.postgres_schema}, public")
+            
+            logger.info(f"Connected to PostgreSQL. Schema: {self._config.postgres_schema}")
         except OperationalError as e:
             logger.error("Failed to connect to PostgreSQL: %s", e)
             raise
 
     def close(self) -> None:
-        """Close PostgreSQL connection safely."""
         if self._conn and not self._conn.closed:
             self._conn.close()
 
     def is_healthy(self) -> bool:
-        """Check if PostgreSQL connection is alive."""
         if not self._conn or self._conn.closed:
             return False
         try:
@@ -93,7 +89,6 @@ class OfflineStore:
 
     @contextmanager
     def _cursor(self):
-        """Context manager for database cursor using RealDictCursor."""
         if not self._conn or self._conn.closed:
             raise RuntimeError("Offline store connection is closed")
         cur = self._conn.cursor(cursor_factory=RealDictCursor)
@@ -102,49 +97,46 @@ class OfflineStore:
         finally:
             cur.close()
 
-    def get_stop_features(
-        self,
-        stop_id: str,
-        hour_of_day: int,
-        day_of_week: int,
-    ) -> Optional[StopFeatures]:
-        """
-        Fetch historical aggregates for a stop context.
-        Strategy: Prioritize exact hour match, fallback to latest computed data for the stop.
-        """
+ 
+    def get_stop_features(self, stop_id: str, hour_of_day: int, day_of_week: int) -> Optional[StopFeatures]:
         query = """
             SELECT 
-                stop_id, hour_of_day, day_of_week,
-                avg_delay_seconds, stddev_delay_seconds,
-                avg_dwell_time_seconds, p90_delay_seconds,
-                sample_count
-            FROM features.stop_historical
+                stop_id, 
+                line_id,
+                hour_of_day, 
+                day_of_week,
+                historical_avg_delay, 
+                historical_stddev_delay,
+                avg_dwell_time_ms, 
+                historical_arrival_count
+            FROM fct_stop_arrivals
             WHERE stop_id = %s
             ORDER BY 
                 (hour_of_day = %s AND day_of_week = %s) DESC, 
-                computed_date DESC,
-                hour_of_day DESC
+                ABS(hour_of_day - %s) ASC
             LIMIT 1
         """
         try:
             with self._cursor() as cur:
-                cur.execute(query, (str(stop_id), hour_of_day, day_of_week))
+                cur.execute(query, (str(stop_id), hour_of_day, day_of_week, hour_of_day))
                 row = cur.fetchone()
                 
                 if not row:
+                    logger.warning(f"No database record found for stop_id {stop_id}")
                     return None
                 
+                # Defensively map using the exact database column names
                 return StopFeatures(
                     stop_id=str(row["stop_id"]),
-                    line_id="", 
-                    hour_of_day=row["hour_of_day"],
-                    day_of_week=row["day_of_week"],
-                    avg_delay_seconds=float(row["avg_delay_seconds"]),
-                    stddev_delay_seconds=float(row["stddev_delay_seconds"]),
-                    avg_dwell_time_seconds=float(row["avg_dwell_time_seconds"]),
-                    p90_delay_seconds=float(row["p90_delay_seconds"]),
-                    sample_count=int(row["sample_count"])
+                    line_id=str(row.get("line_id", "")), 
+                    hour_of_day=int(row["hour_of_day"]),
+                    day_of_week=int(row["day_of_week"]),
+                    avg_delay_seconds=float(row.get("historical_avg_delay") or 0.0),
+                    stddev_delay_seconds=float(row.get("historical_stddev_delay") or 0.0),
+                    avg_dwell_time_seconds=float((row.get("avg_dwell_time_ms") or 0.0) / 1000.0),
+                    p90_delay_seconds=0.0,
+                    sample_count=int(row.get("historical_arrival_count") or 0)
                 )
         except Exception as e:
-            logger.error(f"PostgreSQL fetch error for stop {stop_id}: {e}")
+            logger.error(f"PostgreSQL fetch crash: {e}")
             raise

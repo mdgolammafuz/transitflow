@@ -52,13 +52,14 @@ class CombinedFeatures:
     def to_feature_vector(self) -> Dict[str, Any]:
         """
         Convert to flat feature vector for ML model.
-        This is the format expected by the prediction model.
+        Hardened: Uses None/Null for missing coordinates instead of 0.0 to prevent 
+        data corruption in the prediction layer.
         """
         features: Dict[str, Any] = {
             "vehicle_id": self.vehicle_id,
         }
 
-        # Online (Real-time) Defaults
+        # Online (Real-time) Logic
         if self.online:
             features.update({
                 "current_delay": self.online.current_delay,
@@ -79,12 +80,12 @@ class CombinedFeatures:
                 "speed_trend": 0.0,
                 "is_stopped": 0,
                 "stopped_duration_ms": 0,
-                "latitude": 0.0,
-                "longitude": 0.0,
+                "latitude": None, 
+                "longitude": None,
                 "feature_age_ms": -1,
             })
 
-        # Offline (Historical) Defaults
+        # Offline (Historical) Logic
         if self.offline:
             features.update({
                 "historical_avg_delay": self.offline.avg_delay_seconds,
@@ -132,17 +133,14 @@ class FeatureService:
         self._metrics = FeatureServiceMetrics()
 
     def connect(self) -> None:
-        """Connect to both stores."""
         self._online_store.connect()
         self._offline_store.connect()
 
     def close(self) -> None:
-        """Close connections to both stores."""
         self._online_store.close()
         self._offline_store.close()
 
     def health_check(self) -> Dict[str, Any]:
-        """Check health status and hit rates of both stores."""
         online_healthy = self._online_store.is_healthy()
         offline_healthy = self._offline_store.is_healthy()
 
@@ -161,19 +159,22 @@ class FeatureService:
     def get_features(
         self,
         vehicle_id: int,
-        stop_id: Optional[int] = None,
+        stop_id: Optional[str] = None,
         line_id: Optional[str] = None,
         hour_of_day: Optional[int] = None,
         day_of_week: Optional[int] = None,
     ) -> CombinedFeatures:
         """
-        Orchestrates retrieval from both stores with context inference.
+        Orchestrates retrieval with context inference and fallback.
         """
         now = datetime.now(timezone.utc)
         request_timestamp = int(now.timestamp() * 1000)
         
-        # Default to current time context if not provided
+        # Consistent context inference
         h_ctx = hour_of_day if hour_of_day is not None else now.hour
+        
+        # Align with SQL/DBT: Python's weekday() is 0-6 (Mon-Sun)
+        # We pass this to the offline_store which uses fallback logic for 0-7 compatibility
         d_ctx = day_of_week if day_of_week is not None else now.weekday()
 
         online_data = None
@@ -185,16 +186,16 @@ class FeatureService:
             online_data = self._online_store.get_features(vehicle_id)
             if online_data:
                 self._metrics.online_hits += 1
-                # Context Inference: use data from Redis to help the Postgres lookup
-                if stop_id is None:
-                    stop_id = online_data.next_stop_id
+                # Context propagation
+                if stop_id is None and online_data.next_stop_id:
+                    stop_id = str(online_data.next_stop_id)
                 if line_id is None:
                     line_id = online_data.line_id
         except Exception as e:
             self._metrics.online_errors += 1
-            logger.error("Error fetching online features: %s", e)
+            logger.error(f"Error fetching online features for vehicle {vehicle_id}: {e}")
 
-        # 2. Fetch Offline Features (only if we have stop/line context)
+        # 2. Fetch Offline Features
         if stop_id:
             self._metrics.offline_requests += 1
             try:
@@ -207,7 +208,7 @@ class FeatureService:
                     self._metrics.offline_hits += 1
             except Exception as e:
                 self._metrics.offline_errors += 1
-                logger.error("Error fetching offline features: %s", e)
+                logger.error(f"Error fetching offline features for stop {stop_id}: {e}")
 
         return CombinedFeatures(
             vehicle_id=vehicle_id,
