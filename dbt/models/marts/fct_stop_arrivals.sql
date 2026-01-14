@@ -1,18 +1,46 @@
 {{ config(
     materialized='table', 
-    schema='marts'
+    schema='marts',
+    post_hook=[
+        "ALTER TABLE {{ this }} ADD PRIMARY KEY (feature_id)"
+    ]
 ) }}
 
 with stop_performance as (
-    select * from {{ ref('int_stop_performance') }}
+    -- Clean the incoming IDs from the Spark/Intermediate layer
+    select 
+        trim(cast(stop_id as text)) as stop_id,
+        trim(cast(line_id as text)) as line_id,
+        hour_of_day,
+        day_of_week,
+        sample_count,
+        historical_avg_delay,
+        historical_stddev_delay,
+        on_time_percentage,
+        avg_dwell_time_ms
+    from {{ ref('int_stop_performance') }}
 ),
 
 stops as (
-    select * from {{ ref('dim_stops') }} where is_current = true
+    -- Clean the IDs from the dimension table
+    select 
+        trim(cast(stop_id as text)) as stop_id,
+        stop_name,
+        zone_id,
+        latitude,
+        longitude,
+        stop_code
+    from {{ ref('dim_stops') }} 
+    where is_current = true
 ),
 
 lines as (
-    select * from {{ ref('dim_lines') }} where is_current = true
+    select 
+        trim(cast(line_id as text)) as line_id,
+        line_name,
+        line_type
+    from {{ ref('dim_lines') }} 
+    where is_current = true
 ),
 
 final as (
@@ -24,21 +52,17 @@ final as (
             'sp.day_of_week'
         ]) }} as feature_id,
         
-        -- Normalized IDs
-        trim(cast(sp.stop_id as text)) as stop_id,
-        trim(cast(sp.line_id as text)) as line_id,
+        sp.stop_id,
+        sp.line_id,
+        sp.hour_of_day,
+        sp.day_of_week,
         
-        cast(sp.hour_of_day as integer) as hour_of_day,
-        cast(sp.day_of_week as integer) as day_of_week,
-        
-        -- Feature Metrics
         cast(sp.sample_count as bigint) as historical_arrival_count,
         cast(sp.historical_avg_delay as double precision) as historical_avg_delay,
         cast(sp.historical_stddev_delay as double precision) as historical_stddev_delay,
         cast(sp.on_time_percentage as double precision) as historical_on_time_pct,
         cast(sp.avg_dwell_time_ms as double precision) as avg_dwell_time_ms,
         
-        -- Metadata (Now guaranteed by our 100% Green build)
         s.stop_name,
         s.zone_id,
         cast(s.latitude as double precision) as latitude,
@@ -48,8 +72,8 @@ final as (
         l.line_type
         
     from stop_performance sp
-    left join stops s on trim(sp.stop_id) = trim(s.stop_id)
-    left join lines l on trim(sp.line_id) = trim(l.line_id)
+    inner join stops s on sp.stop_id = s.stop_id
+    inner join lines l on sp.line_id = l.line_id
 )
 
 select * from final
