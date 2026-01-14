@@ -35,17 +35,14 @@ async def lifespan(app: FastAPI):
     global feature_service
     feature_service = FeatureService(config)
     try:
-        # Hardened: Attempt connections but catch errors to prevent startup crash
         feature_service.connect()
         logger.info("Feature service initialized successfully")
     except Exception as e:
-        # This is where we handle the "Authentication required" or "Connection refused" errors
         logger.error(f"Feature service started in DEGRADED mode. Connection error: {e}")
         logger.warning("Online features may be unavailable, but Offline lookups will proceed.")
     
-    yield  # The API runs here
+    yield
     
-    # Cleanup on shutdown
     if feature_service:
         try:
             feature_service.close()
@@ -60,18 +57,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
 class HealthResponse(BaseModel):
-    """Health check response."""
     status: str
     online_store: str
     offline_store: str
     active_vehicles: int
     metrics: Dict[str, Any]
 
-
 class OnlineFeaturesResponse(BaseModel):
-    """Online features from Redis."""
     vehicle_id: int
     line_id: Optional[str]
     current_delay: int
@@ -89,36 +82,27 @@ class OnlineFeaturesResponse(BaseModel):
     @field_validator('latitude', 'longitude')
     @classmethod
     def validate_coordinates(cls, v: float) -> float:
-        """
-        Robustness: Allows 0.0 coordinates. 
-        Supplemental seed data uses 0.0 as a placeholder; we must not crash the API.
-        """
         return v
 
-
 class OfflineFeaturesResponse(BaseModel):
-    """Offline features from PostgreSQL - Aligned with dbt marts."""
+    """Offline features - Aligned exactly with fct_stop_arrivals schema."""
     stop_id: str
     line_id: str
     hour_of_day: int = Field(ge=0, le=23)
     day_of_week: int = Field(ge=0, le=7)
-    avg_delay_seconds: float
-    stddev_delay_seconds: float
+    historical_avg_delay: float
+    historical_stddev_delay: float
     avg_dwell_time_seconds: float
-    p90_delay_seconds: float = 0.0
-    sample_count: int
+    historical_arrival_count: int
 
-    @field_validator('sample_count')
+    @field_validator('historical_arrival_count')
     @classmethod
     def validate_sample_size(cls, v: int) -> int:
-        """Robustness: Ensure we have at least one sample to provide context."""
         if v < 1:
             raise ValueError('No historical samples available for this context')
         return v
 
-
 class CombinedFeaturesResponse(BaseModel):
-    """Combined feature response."""
     vehicle_id: int
     request_timestamp: int
     online_available: bool
@@ -127,16 +111,12 @@ class CombinedFeaturesResponse(BaseModel):
     offline_features: Optional[OfflineFeaturesResponse] = None
     latency_ms: float
 
-
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Check service health across both stores."""
     if not feature_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
-
     health = feature_service.health_check()
     active = feature_service.get_active_vehicles()
-
     return HealthResponse(
         status=health["status"],
         online_store=health["online_store"],
@@ -145,25 +125,18 @@ async def health_check():
         metrics=health["metrics"],
     )
 
-
 @app.get("/features/{vehicle_id}", response_model=CombinedFeaturesResponse)
 async def get_features(
     vehicle_id: int,
     stop_id: Optional[str] = Query(None, description="Stop ID for offline features"),
     line_id: Optional[str] = Query(None, description="Line ID for offline features"),
     hour_of_day: Optional[int] = Query(None, ge=0, le=23, description="Hour context"),
-    day_of_week: Optional[int] = Query(None, ge=0, le=7, description="Day context (0-6 or 1-7)"),
+    day_of_week: Optional[int] = Query(None, ge=0, le=7, description="Day context (0-6)"),
 ):
-    """
-    Unified endpoint for real-time and historical features.
-    If Redis/Flink is down, it relies on Query parameters for Offline context.
-    """
     if not feature_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
     start = time.perf_counter()
-
-    # The FeatureService handles the orchestration and default system time context
     combined = feature_service.get_features(
         vehicle_id=vehicle_id,
         stop_id=stop_id,
@@ -171,10 +144,8 @@ async def get_features(
         hour_of_day=hour_of_day,
         day_of_week=day_of_week,
     )
-
     latency_ms = (time.perf_counter() - start) * 1000
 
-    # Build response dictionary
     res_data = {
         "vehicle_id": combined.vehicle_id,
         "request_timestamp": combined.request_timestamp,
@@ -185,51 +156,43 @@ async def get_features(
         "offline_features": None
     }
 
-    # Populate online features if available and valid
     if combined.online:
         try:
             res_data["online_features"] = combined.online.to_dict()
         except Exception as e:
-            logger.warning(f"Online validation failed for vehicle {vehicle_id}: {e}")
+            logger.warning(f"Online validation failed: {e}")
             res_data["online_available"] = False
 
-    # Populate offline features if available and valid
     if combined.offline:
         try:
+            # Combined.offline is a StopFeatures object
             res_data["offline_features"] = combined.offline.to_dict()
         except Exception as e:
-            logger.warning(f"Offline validation failed for stop {stop_id}: {e}")
+            logger.warning(f"Offline validation failed: {e}")
             res_data["offline_available"] = False
 
     return JSONResponse(content=res_data)
 
-
 @app.get("/metrics")
 async def get_metrics():
-    """Monitoring metrics for both stores."""
     if not feature_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
-
     metrics = feature_service.get_metrics()
     active = feature_service.get_active_vehicles()
-
     return {
         "active_vehicles": active,
         "online": {
             "requests": metrics.online_requests,
             "hits": metrics.online_hits,
-            "errors": metrics.online_errors,
             "hit_rate": round(metrics.online_hit_rate, 3),
         },
         "offline": {
             "requests": metrics.offline_requests,
             "hits": metrics.offline_hits,
-            "errors": metrics.offline_errors,
             "hit_rate": round(metrics.offline_hit_rate, 3),
         },
     }
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting TransitFlow Feature API on http://0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)
