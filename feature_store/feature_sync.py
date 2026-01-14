@@ -1,12 +1,12 @@
 """
-Feature Sync Job - dbt mart to PostgreSQL.
+Feature Sync Job - Delta Lake to PostgreSQL.
 
 Pattern:
 Semantic Interface
 ML Reproducibility
 
 Syncs stop performance features from Delta Lake Gold layer 
-to PostgreSQL features.stop_historical table for serving.
+to PostgreSQL marts.fct_stop_arrivals for unified serving.
 """
 
 import argparse
@@ -45,24 +45,40 @@ def get_spark_session() -> SparkSession:
     )
 
 def read_stop_performance(spark: SparkSession, bucket: str) -> DataFrame:
+    """
+    Read from Delta Lake Gold layer and prepare for PostgreSQL.
+    Aligns naming convention to the dbt/API contract.
+    """
     gold_path = f"s3a://{bucket}/gold/stop_performance"
-    df = spark.read.format("delta").load(gold_path)
+    
+    try:
+        df = spark.read.format("delta").load(gold_path)
+    except Exception as e:
+        logger.error(f"Could not load Delta table at {gold_path}. Ensure Spark Gold processing finished.")
+        raise e
 
-    # STRICT MAPPING + NULL HANDLING
+    # Mapping physical Spark columns to logical dbt/API names
     return df.select(
         F.col("stop_id").cast("string"),
+        F.col("line_id").cast("string") if "line_id" in df.columns else F.lit("").alias("line_id"),
         F.col("hour_of_day").cast("int"),
         F.col("day_of_week").cast("int"),
-        F.col("avg_delay").cast("float").alias("avg_delay_seconds"),
-        F.lit(0.0).cast("float").alias("stddev_delay_seconds"),
-        (F.col("avg_dwell_time_ms").cast("float") / 1000).alias("avg_dwell_time_seconds"),
-        F.lit(0.0).cast("float").alias("p90_delay_seconds"),
-        F.col("arrival_count").cast("int").alias("sample_count")
-    ).na.fill(0.0) # This replaces any nulls with 0.0 before writing to Postgres
+        
+        # Mapping Spark names to the names expected by our Postgres Mart
+        F.col("avg_delay").cast("float").alias("historical_avg_delay"),
+        
+        (F.col("stddev_delay") if "stddev_delay" in df.columns else F.lit(0.0)).cast("float").alias("historical_stddev_delay"),
+        
+        # Keep MS for storage; API handles seconds conversion
+        F.col("avg_dwell_time_ms").cast("float").alias("avg_dwell_time_ms"),
+        
+        # Mapping 'arrival_count' to 'historical_arrival_count'
+        F.col("arrival_count").cast("long").alias("historical_arrival_count")
+    ).na.fill(0.0)
 
-def write_to_postgres(df: DataFrame, computed_date: str) -> int:
-    """Write features to PostgreSQL using staging and upsert logic."""
-    df_with_date = df.withColumn("computed_date", F.lit(computed_date))
+
+def write_to_postgres(df: DataFrame) -> int:
+    """Write features to PostgreSQL using staging and atomic upsert logic."""
     
     host = os.environ.get("POSTGRES_HOST", "postgres")
     port = os.environ.get("POSTGRES_PORT", "5432")
@@ -77,39 +93,38 @@ def write_to_postgres(df: DataFrame, computed_date: str) -> int:
         "driver": "org.postgresql.Driver",
     }
 
-    temp_table = "features.stop_historical_staging"
+    # Use staging table for atomic upsert
+    temp_table = "marts.fct_stop_arrivals_staging"
     logger.info("Writing batch to staging table via JDBC: %s", temp_table)
 
     # 1. Overwrite staging table
-    df_with_date.write.jdbc(url=jdbc_url, table=temp_table, mode="overwrite", properties=properties)
+    df.write.jdbc(url=jdbc_url, table=temp_table, mode="overwrite", properties=properties)
 
-    # 2. Execute Upsert with explicit casting for computed_date
-    upsert_sql = f"""
-        INSERT INTO features.stop_historical (
-            stop_id, hour_of_day, day_of_week,
-            avg_delay_seconds, stddev_delay_seconds,
-            avg_dwell_time_seconds, p90_delay_seconds,
-            sample_count, computed_date
+    # 2. Execute Upsert logic into the dbt Mart
+    # Logic: Generates surrogate key to maintain dbt primary key consistency
+    upsert_sql = """
+        INSERT INTO marts.fct_stop_arrivals (
+            feature_id, stop_id, line_id, hour_of_day, day_of_week,
+            historical_arrival_count, historical_avg_delay, 
+            historical_stddev_delay, historical_on_time_pct, avg_dwell_time_ms
         )
         SELECT 
-            stop_id, hour_of_day, day_of_week,
-            avg_delay_seconds, stddev_delay_seconds,
-            avg_dwell_time_seconds, p90_delay_seconds,
-            sample_count,
-            computed_date::DATE  -- Explicit cast from TEXT to DATE
-        FROM {temp_table}
-        ON CONFLICT (stop_id, hour_of_day, day_of_week)
+            md5(stop_id || line_id || hour_of_day || day_of_week) as feature_id,
+            stop_id, line_id, hour_of_day, day_of_week,
+            historical_arrival_count, historical_avg_delay,
+            historical_stddev_delay, 100.0 as historical_on_time_pct,
+            avg_dwell_time_ms
+        FROM marts.fct_stop_arrivals_staging
+        ON CONFLICT (stop_id, line_id, hour_of_day, day_of_week)
         DO UPDATE SET
-            avg_delay_seconds = EXCLUDED.avg_delay_seconds,
-            stddev_delay_seconds = EXCLUDED.stddev_delay_seconds,
-            avg_dwell_time_seconds = EXCLUDED.avg_dwell_time_seconds,
-            p90_delay_seconds = EXCLUDED.p90_delay_seconds,
-            sample_count = EXCLUDED.sample_count,
-            computed_date = EXCLUDED.computed_date;
+            historical_arrival_count = EXCLUDED.historical_arrival_count,
+            historical_avg_delay = EXCLUDED.historical_avg_delay,
+            historical_stddev_delay = EXCLUDED.historical_stddev_delay,
+            avg_dwell_time_ms = EXCLUDED.avg_dwell_time_ms;
     """
     
     import psycopg2
-    logger.info("Executing Upsert on production table: features.stop_historical")
+    logger.info("Executing Upsert on production table: marts.fct_stop_arrivals")
     conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=db)
     try:
         with conn.cursor() as cur:
@@ -119,22 +134,18 @@ def write_to_postgres(df: DataFrame, computed_date: str) -> int:
         conn.close()
 
     row_count = df.count()
-    logger.info("Successfully synced %d rows to production features table", row_count)
+    logger.info("Successfully synced %d rows to marts.fct_stop_arrivals", row_count)
     return row_count
 
 
-def run_feature_sync(computed_date: Optional[str] = None, bucket: str = "transitflow-lakehouse") -> dict:
-    if computed_date is None:
-        computed_date = date.today().isoformat()
-
+def run_feature_sync(bucket: str = "transitflow-lakehouse") -> dict:
     spark = get_spark_session()
     try:
         stop_features = read_stop_performance(spark, bucket)
-        rows_written = write_to_postgres(stop_features, computed_date)
+        rows_written = write_to_postgres(stop_features)
 
         return {
             "status": "success",
-            "computed_date": computed_date,
             "rows_written": rows_written,
         }
     except Exception as e:
@@ -146,7 +157,6 @@ def run_feature_sync(computed_date: Optional[str] = None, bucket: str = "transit
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--date", type=str, help="YYYY-MM-DD")
     parser.add_argument("--bucket", default="transitflow-lakehouse")
     args = parser.parse_args()
-    run_feature_sync(args.date, args.bucket)
+    run_feature_sync(args.bucket)
