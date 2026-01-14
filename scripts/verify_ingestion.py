@@ -4,12 +4,6 @@ Phase 1 Verification Script
 
 Run this script locally to verify the ingestion setup works.
 Tests MQTT connection, message parsing, and Kafka production.
-
-Usage:
-    python scripts/verify_phase1.py --test-mqtt      # Test MQTT connection only
-    python scripts/verify_phase1.py --test-parse    # Test message parsing only
-    python scripts/verify_phase1.py --test-kafka    # Test Kafka connection only
-    python scripts/verify_phase1.py --full          # Full integration test
 """
 
 import argparse
