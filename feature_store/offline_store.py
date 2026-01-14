@@ -16,7 +16,6 @@ from feature_store.config import FeatureStoreConfig
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass(frozen=True)
 class StopFeatures:
     """Historical features for a stop at a specific time context."""
@@ -24,11 +23,10 @@ class StopFeatures:
     line_id: str
     hour_of_day: int
     day_of_week: int
-    avg_delay_seconds: float
-    stddev_delay_seconds: float
+    historical_avg_delay: float
+    historical_stddev_delay: float
     avg_dwell_time_seconds: float
-    p90_delay_seconds: float
-    sample_count: int
+    historical_arrival_count: int
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -36,13 +34,11 @@ class StopFeatures:
             "line_id": self.line_id,
             "hour_of_day": self.hour_of_day,
             "day_of_week": self.day_of_week,
-            "avg_delay_seconds": self.avg_delay_seconds,
-            "stddev_delay_seconds": self.stddev_delay_seconds,
+            "historical_avg_delay": self.historical_avg_delay,
+            "historical_stddev_delay": self.historical_stddev_delay,
             "avg_dwell_time_seconds": self.avg_dwell_time_seconds,
-            "p90_delay_seconds": self.p90_delay_seconds,
-            "sample_count": self.sample_count,
+            "historical_arrival_count": self.historical_arrival_count,
         }
-
 
 class OfflineStore:
     """PostgreSQL-based offline feature store."""
@@ -52,7 +48,6 @@ class OfflineStore:
         self._conn: Optional[psycopg2.extensions.connection] = None
 
     def connect(self) -> None:
-        """Establish connection and force search_path to dbt marts."""
         try:
             self._conn = psycopg2.connect(
                 host=self._config.postgres_host,
@@ -64,7 +59,6 @@ class OfflineStore:
             )
             self._conn.autocommit = True
             
-            # CRITICAL: Force the connection to see the dbt schema
             with self._conn.cursor() as cur:
                 cur.execute(f"SET search_path TO {self._config.postgres_schema}, public")
             
@@ -97,8 +91,11 @@ class OfflineStore:
         finally:
             cur.close()
 
- 
     def get_stop_features(self, stop_id: str, hour_of_day: int, day_of_week: int) -> Optional[StopFeatures]:
+        """
+        Retrieves historical features from the dbt mart.
+        Matches stop_id and provides nearest-hour fallback for robustness.
+        """
         query = """
             SELECT 
                 stop_id, 
@@ -125,17 +122,15 @@ class OfflineStore:
                     logger.warning(f"No database record found for stop_id {stop_id}")
                     return None
                 
-                # Defensively map using the exact database column names
                 return StopFeatures(
                     stop_id=str(row["stop_id"]),
-                    line_id=str(row.get("line_id", "")), 
+                    line_id=str(row.get("line_id", "UNKNOWN")), 
                     hour_of_day=int(row["hour_of_day"]),
                     day_of_week=int(row["day_of_week"]),
-                    avg_delay_seconds=float(row.get("historical_avg_delay") or 0.0),
-                    stddev_delay_seconds=float(row.get("historical_stddev_delay") or 0.0),
+                    historical_avg_delay=float(row.get("historical_avg_delay") or 0.0),
+                    historical_stddev_delay=float(row.get("historical_stddev_delay") or 0.0),
                     avg_dwell_time_seconds=float((row.get("avg_dwell_time_ms") or 0.0) / 1000.0),
-                    p90_delay_seconds=0.0,
-                    sample_count=int(row.get("historical_arrival_count") or 0)
+                    historical_arrival_count=int(row.get("historical_arrival_count") or 0)
                 )
         except Exception as e:
             logger.error(f"PostgreSQL fetch crash: {e}")
