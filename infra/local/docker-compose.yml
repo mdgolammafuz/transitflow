@@ -104,35 +104,36 @@ services:
     depends_on:
       - flink-jobmanager
 
-  # --- Batch & Lakehouse Processing (Spark) ---
+ # batch job: spark
+
+  # infra/local/docker-compose.yml
+
   spark-master:
     image: apache/spark:3.5.0
     container_name: spark-master
     user: root
-    environment:
-      <<: *app-env
-      SPARK_LOCAL_IP: spark-master
-    ports:
-      - "8083:8080"
-      - "7077:7077"
-    # Clean startup command - no shell logic
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    # ... existing environment and ports ...
+    command: >
+      sh -c "pip3 install psycopg2-binary && 
+             /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master"
     volumes:
       - ../../spark:/opt/spark/jobs/spark
+      - ../../feature_store:/opt/spark/jobs/feature_store
+      - ../../src:/opt/spark/jobs/src
 
   spark-worker:
     image: apache/spark:3.5.0
     container_name: spark-worker
     user: root
-    environment:
-      <<: *app-env
-      SPARK_LOCAL_IP: spark-worker
-      SPARK_WORKER_CORES: 2
-      SPARK_WORKER_MEMORY: 2G
-    # Clean startup command pointing to the master
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    # ... existing environment ...
+    command: >
+      sh -c "pip3 install psycopg2-binary && 
+             /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077"
     volumes:
       - ../../spark:/opt/spark/jobs/spark
+      - ../../feature_store:/opt/spark/jobs/feature_store
+      - ../../src:/opt/spark/jobs/src
+
 # Storage
   minio:
     image: minio/minio:RELEASE.2024-01-13T07-53-03Z
