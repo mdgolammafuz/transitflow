@@ -1,5 +1,3 @@
-# Intermediate Models Configuration
-
 version: 2
 
 models:
@@ -7,16 +5,16 @@ models:
     description: "Sessionized vehicle journeys with aggregated metrics"
     columns:
       - name: vehicle_id
-        tests:
+        data_tests:
           - not_null
       - name: journey_id
-        description: "Unique journey identifier (vehicle_id + journey_date)"
-        tests:
+        description: "Unique journey identifier"
+        data_tests:
           - not_null
           - unique
       - name: event_count
         description: "Number of telemetry events in journey"
-        tests:
+        data_tests:
           - not_null
           - dbt_expectations.expect_column_values_to_be_between:
               min_value: 1
@@ -26,11 +24,15 @@ models:
     description: "Stop-level performance metrics for ML features"
     columns:
       - name: stop_id
-        tests:
+        data_tests:
           - not_null
       - name: line_id
-        tests:
+        data_tests:
           - not_null
-      - name: arrival_count
-        tests:
+      - name: sample_count
+        description: "Historical count of arrivals in this bucket"
+        data_tests:
+          - not_null
+      - name: historical_avg_delay
+        data_tests:
           - not_null

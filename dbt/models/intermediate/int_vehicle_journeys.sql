@@ -1,5 +1,6 @@
 /*
     Intermediate: Vehicle journey sessionization.
+    Harden: Consistent type casting for contract enforcement and total_distance calculation.
 */
 
 with enriched as (
@@ -10,7 +11,8 @@ journeys as (
     select
         vehicle_id,
         event_date as journey_date,
-        {{ dbt_utils.generate_surrogate_key(['vehicle_id', 'event_date']) }} as journey_id,
+        -- Unique identifier for the journey session
+        {{ dbt_utils.generate_surrogate_key(['vehicle_id', 'event_date', 'line_id']) }} as journey_id,
         line_id,
         
         min(event_timestamp) as journey_start,
@@ -30,12 +32,24 @@ journeys as (
         
     from enriched
     group by vehicle_id, event_date, line_id
+),
+
+final as (
+    select
+        *,
+        -- Conversion to KM (Double Precision)
+        cast(total_distance_ms / 1000000.0 as double precision) as total_distance_km,
+        
+        -- Percentage logic with division safety
+        cast(
+            on_time_count * 100.0 / nullif(event_count, 0) 
+        as double precision) as on_time_percentage,
+        
+        -- Duration calculation in decimal hours
+        cast(
+            extract(epoch from (journey_end - journey_start)) / 3600.0 
+        as double precision) as journey_duration_hours
+    from journeys
 )
 
-select
-    *,
-    -- Conversion to KM
-    total_distance_ms / 1000.0 as total_distance_km,
-    on_time_count * 100.0 / nullif(event_count, 0) as on_time_percentage,
-    extract(epoch from (journey_end - journey_start)) / 3600.0 as journey_duration_hours
-from journeys
+select * from final

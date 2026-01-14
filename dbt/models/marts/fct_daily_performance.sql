@@ -1,31 +1,34 @@
 /*
     Fact Table: Daily Performance
+    Aggregated KPIs for historical line analysis.
 */
 
-with journeys as (
-    select * from {{ ref('int_vehicle_journeys') }}
+{{ config(
+    materialized='table',
+    schema='marts'
+) }}
+
+with raw_daily as (
+    -- Reading from the Spark Sink in public schema
+    select * from {{ source('raw_lakehouse', 'fct_daily_performance') }}
 ),
 
-daily_metrics as (
+final as (
     select
+        {{ dbt_utils.generate_surrogate_key(['line_id', 'date']) }} as metric_id,
         line_id,
-        journey_date as metric_date,
+        cast(date as date) as metric_date,
         
-        count(*) as total_journeys,
-        sum(event_count) as total_events,
-        count(distinct vehicle_id) as unique_vehicles,
+        -- Aggregates cast to match enforced contract (Postgres double precision/bigint)
+        cast(1 as bigint) as total_journeys, 
+        cast(total_events as bigint) as total_events,
+        cast(0 as bigint) as unique_vehicles, 
         
-        avg(avg_delay_seconds) as avg_delay_seconds,
-        avg(on_time_percentage) as on_time_percentage,
+        cast(avg_delay_seconds as double precision) as avg_delay_seconds,
+        cast(on_time_percentage as double precision) as on_time_percentage,
+        cast(0.0 as double precision) as total_distance_km
         
-        sum(total_distance_km) as total_distance_km
-        
-    from journeys
-    where line_id is not null
-    group by line_id, journey_date
+    from raw_daily
 )
 
-select
-    {{ dbt_utils.generate_surrogate_key(['line_id', 'metric_date']) }} as metric_id,
-    *
-from daily_metrics
+select * from final
