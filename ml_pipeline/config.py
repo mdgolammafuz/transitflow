@@ -1,6 +1,6 @@
 """
 ML Pipeline configuration.
-Hardened for Phase 6 consistency with verified Postgres and Delta Lake schemas.
+Hardened for Phase 6 consistency with verified Delta Lake Gold schemas.
 """
 
 import os
@@ -18,7 +18,7 @@ class MLConfig:
 
     delta_lake_path: str
     training_table: str
-    
+
     postgres_host: str
     postgres_db: str
 
@@ -37,36 +37,39 @@ class MLConfig:
     @classmethod
     def from_env(cls) -> "MLConfig":
         """Load configuration from environment variables."""
+
+        # FIXED: Features confirmed present in your Gold aggregation logs
+        default_features = [
+            "stop_id",
+            "line_id",
+            "hour_of_day",
+            "day_of_week",
+            "arrival_count",
+            "avg_dwell_time_ms",
+        ]
+
+        features_env = os.environ.get("FEATURE_COLUMNS")
+        feature_list = features_env.split(",") if features_env else default_features
+
         return cls(
-            mlflow_tracking_uri=os.environ.get(
-                "MLFLOW_TRACKING_URI", "http://localhost:5000"
-            ),
+            mlflow_tracking_uri=os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
             mlflow_experiment_name=os.environ.get(
                 "MLFLOW_EXPERIMENT_NAME", "transitflow-delay-prediction"
             ),
             model_name=os.environ.get("MODEL_NAME", "delay-predictor"),
-            delta_lake_path=os.environ.get(
-                "DELTA_LAKE_PATH", "s3a://transitflow-lakehouse"
-            ),
-            # Path matches your spark/gold_aggregation.py output
+            delta_lake_path=os.environ.get("DELTA_LAKE_PATH", "s3a://transitflow-lakehouse"),
             training_table=os.environ.get("TRAINING_TABLE", "gold/stop_performance"),
-            postgres_host=os.environ.get("POSTGRES_HOST", "localhost"),
+            postgres_host=os.environ.get("POSTGRES_HOST", "postgres"),
             postgres_db=os.environ.get("POSTGRES_DB", "transit"),
-            # Optimized feature set: Only columns confirmed in dbt/Spark
-            feature_columns=os.environ.get(
-                "FEATURE_COLUMNS",
-                "hour_of_day,day_of_week,latitude,longitude,"
-                "historical_avg_delay,avg_dwell_time_ms,sample_count"
-            ).split(","),
-            target_column=os.environ.get("TARGET_COLUMN", "historical_avg_delay"),
+            feature_columns=feature_list,
+            # FIXED: Target column is 'avg_delay' in Gold table
+            target_column=os.environ.get("TARGET_COLUMN", "avg_delay"),
             test_size=float(os.environ.get("TEST_SIZE", "0.2")),
             random_state=int(os.environ.get("RANDOM_STATE", "42")),
             xgb_n_estimators=int(os.environ.get("XGB_N_ESTIMATORS", "100")),
             xgb_max_depth=int(os.environ.get("XGB_MAX_DEPTH", "6")),
             xgb_learning_rate=float(os.environ.get("XGB_LEARNING_RATE", "0.1")),
-            model_cache_ttl_seconds=int(
-                os.environ.get("MODEL_CACHE_TTL_SECONDS", "300")
-            ),
+            model_cache_ttl_seconds=int(os.environ.get("MODEL_CACHE_TTL_SECONDS", "300")),
         )
 
     @classmethod
