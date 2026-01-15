@@ -8,11 +8,10 @@ import logging
 from typing import Optional
 
 from delta.tables import DeltaTable
-from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import avg, col, count, dayofweek, hour
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql.functions import avg, col, count, dayofweek, hour, when
 from pyspark.sql.functions import round as spark_round
 from pyspark.sql.functions import sum as spark_sum
-from pyspark.sql.functions import when
 
 # Absolute import for package consistency
 from spark.config import create_spark_session, load_config

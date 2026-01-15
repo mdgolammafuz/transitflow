@@ -46,12 +46,12 @@ class SparkConfig:
         """Construct logic-based paths after initialization."""
         # Define the base URI with the S3A protocol
         base = f"s3a://{self.lakehouse_bucket}"
-        
+
         # Structure the medallion layers
         self.bronze_path = f"{base}/bronze"
         self.silver_path = f"{base}/silver"
         self.gold_path = f"{base}/gold"
-        
+
         # Shallow checkpoint directory for easier cleanup
         self.checkpoint_base = f"{base}/_checkpoints"
 
@@ -127,7 +127,7 @@ def create_spark_session(app_name: str):
         )
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
-            "spark.sql.catalog.spark_catalog", 
+            "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog"
         )
         # --- S3A Connectivity & Auth ---
@@ -137,14 +137,14 @@ def create_spark_session(app_name: str):
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .config(
-            "spark.hadoop.fs.s3a.aws.credentials.provider", 
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
             "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
         )
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        
+
         # --- Delta Lake Storage Reliability ---
         .config(
-            "spark.delta.logStore.class", 
+            "spark.delta.logStore.class",
             "org.apache.spark.sql.delta.storage.S3SingleDriverLogStore"
         )
         .getOrCreate()
