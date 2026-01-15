@@ -115,43 +115,59 @@ def aggregate_hourly_metrics(spark: SparkSession, config, process_date: Optional
 
 
 def aggregate_stop_performance(spark: SparkSession, config, process_date: Optional[str] = None):
-    """Aggregate stop events for ML feature engineering."""
+    """Aggregate stop events for ML feature engineering with coordinate enrichment."""
+    # Paths
     silver_path = f"{config.silver_path}/stop_events"
+    metadata_path = f"{config.gold_path}/stops" # or where your stops metadata lives
     gold_path = f"{config.gold_path}/stop_performance"
-    logger.info("Aggregating stop performance")
+    
+    logger.info("Aggregating and enriching stop performance")
     try:
+        # 1. Load Data
         silver_df = spark.read.format("delta").load(silver_path)
         if process_date:
             silver_df = silver_df.filter(col("date") == process_date)
 
-        stop_df = (
+        # 2. Load Metadata (Lat/Lon)
+        # We only need the ID and the coordinates
+        stops_metadata = spark.read.format("delta").load(metadata_path).select(
+            col("stop_id"),
+            col("stop_lat").alias("latitude"),
+            col("stop_lon").alias("longitude")
+        )
+
+        # 3. Calculate Metrics with 'Historical' Naming Contract
+        stop_metrics = (
             silver_df.withColumn("hour_of_day", hour("arrival_timestamp"))
             .withColumn("day_of_week", dayofweek("arrival_timestamp"))
             .groupBy("stop_id", "line_id", "hour_of_day", "day_of_week")
             .agg(
-                count("*").alias("arrival_count"),
-                spark_round(avg("delay_at_arrival"), 2).alias("avg_delay"),
+                count("*").alias("historical_arrival_count"),
+                spark_round(avg("delay_at_arrival"), 2).alias("historical_avg_delay"),
                 spark_round(avg("dwell_time_ms"), 0).alias("avg_dwell_time_ms"),
             )
         )
 
-        # 1. Update Lakehouse (MinIO)
+        # 4. Enrich with Coordinates
+        # Joining here makes S3 "Smart" and ML-ready
+        enriched_stop_df = stop_metrics.join(stops_metadata, on="stop_id", how="inner")
+
+        # 5. Update Lakehouse (MinIO)
         if DeltaTable.isDeltaTable(spark, gold_path):
             dt = DeltaTable.forPath(spark, gold_path)
             dt.alias("t").merge(
-                stop_df.alias("s"),
+                enriched_stop_df.alias("s"),
                 "t.stop_id = s.stop_id AND t.line_id = s.line_id "
                 "AND t.hour_of_day = s.hour_of_day AND t.day_of_week = s.day_of_week",
             ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
         else:
-            stop_df.write.format("delta").mode("overwrite").save(gold_path)
+            enriched_stop_df.write.format("delta").mode("overwrite").save(gold_path)
 
-        # 2. Update Postgres (Source for dbt)
-        write_to_postgres(stop_df, "public.fct_stop_arrivals", config)
+        # 6. Update Postgres (Syncing the Enriched Table)
+        write_to_postgres(enriched_stop_df, "public.fct_stop_arrivals", config)
 
     except Exception as e:
-        logger.error(f"Stop performance aggregation failed: {e}")
-
+        logger.error(f"Stop performance aggregation and enrichment failed: {e}")
 
 def main():
     parser = argparse.ArgumentParser()
