@@ -4,11 +4,10 @@ Hardened: Validates schema alignment with dbt marts and coordinate handling.
 """
 
 import os
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 # Tests are isolated to ensure environment variables don't bleed between runs
+
 
 class TestFeatureStoreConfig:
     """Tests for FeatureStoreConfig initialization and methods."""
@@ -17,6 +16,7 @@ class TestFeatureStoreConfig:
         """Verify default values and the new dbt schema default."""
         with patch.dict(os.environ, {}, clear=True):
             from feature_store.config import FeatureStoreConfig
+
             config = FeatureStoreConfig()
             assert config.redis_host == "localhost"
             assert config.postgres_host == "localhost"
@@ -26,6 +26,7 @@ class TestFeatureStoreConfig:
     def test_postgres_dsn_format(self):
         """Verify the Postgres connection string construction."""
         from feature_store.config import FeatureStoreConfig
+
         config = FeatureStoreConfig(postgres_host="pg_prod", postgres_user="transit_app")
         assert "pg_prod" in config.postgres_dsn()
         assert "transit_app" in config.postgres_dsn()
@@ -53,15 +54,25 @@ class TestFeatureVectorConsistency:
         vector = combined_empty.to_feature_vector()
 
         expected_keys = [
-            "vehicle_id", "current_delay", "delay_trend", "current_speed",
-            "speed_trend", "is_stopped", "stopped_duration_ms", "latitude",
-            "longitude", "feature_age_ms", "historical_avg_delay",
-            "historical_stddev_delay", "historical_p90_delay", "historical_sample_count"
+            "vehicle_id",
+            "current_delay",
+            "delay_trend",
+            "current_speed",
+            "speed_trend",
+            "is_stopped",
+            "stopped_duration_ms",
+            "latitude",
+            "longitude",
+            "feature_age_ms",
+            "historical_avg_delay",
+            "historical_stddev_delay",
+            "historical_p90_delay",
+            "historical_sample_count",
         ]
 
         for key in expected_keys:
             assert key in vector, f"ML Contract Broken: Missing key {key}"
-        
+
         # Verify default values for missing data
         assert vector["current_delay"] == 0
         assert vector["historical_avg_delay"] == 0.0
@@ -69,7 +80,7 @@ class TestFeatureVectorConsistency:
 
     def test_coordinate_hardening_in_vector(self):
         """
-        Ensures that even if the API allows 0.0, the feature vector 
+        Ensures that even if the API allows 0.0, the feature vector
         replaces it with None for the ML model to prevent bias.
         """
         from feature_store.feature_service import CombinedFeatures
@@ -89,20 +100,20 @@ class TestFeatureVectorConsistency:
             longitude=0.0,
             next_stop_id=1010101,
             updated_at=1704067200000,
-            feature_age_ms=500
+            feature_age_ms=500,
         )
 
         combined = CombinedFeatures(
             vehicle_id=1362,
             request_timestamp=1704067200500,
             online=online_with_placeholders,
-            online_available=True
+            online_available=True,
         )
 
         vector = combined.to_feature_vector()
-        # In the vector, we prefer explicit 0.0 if that's what was in the store, 
+        # In the vector, we prefer explicit 0.0 if that's what was in the store,
         # or None if the logic handles 'Online missing' (Logic check)
-        assert vector["latitude"] == 0.0 
+        assert vector["latitude"] == 0.0
 
 
 class TestStoreHealthState:
@@ -117,7 +128,7 @@ class TestStoreHealthState:
         store = OnlineStore(config)
         assert store.is_healthy() is False
 
-    @patch('psycopg2.connect')
+    @patch("psycopg2.connect")
     def test_offline_store_search_path(self, mock_connect):
         """Verify the store explicitly sets the search path to marts."""
         from feature_store.config import FeatureStoreConfig
@@ -125,7 +136,7 @@ class TestStoreHealthState:
 
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
-        
+
         config = FeatureStoreConfig(postgres_schema="marts")
         store = OfflineStore(config)
         store.connect()

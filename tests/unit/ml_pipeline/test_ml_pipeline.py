@@ -4,11 +4,14 @@ Aligned with hardened MLConfig schema.
 """
 
 import os
-import pytest
-import numpy as np
 from unittest.mock import patch
+
+import numpy as np
+import pytest
+
 from ml_pipeline.config import MLConfig
-from ml_pipeline.training import DelayPredictor, train_model, TrainingResult
+from ml_pipeline.training import DelayPredictor
+
 
 class TestMLConfig:
     def test_config_from_env_defaults(self):
@@ -20,8 +23,8 @@ class TestMLConfig:
 
     def test_config_default_factory(self):
         config = MLConfig.default()
-        # Aligned with verified schema: 
-        # [hour_of_day, day_of_week, latitude, longitude, 
+        # Aligned with verified schema:
+        # [hour_of_day, day_of_week, latitude, longitude,
         #  historical_avg_delay, avg_dwell_time_ms, sample_count]
         assert len(config.feature_columns) == 7
         assert config.target_column == "historical_avg_delay"
@@ -44,7 +47,7 @@ class TestDelayPredictor:
     def test_predictor_train(self):
         config = MLConfig.default()
         predictor = DelayPredictor(config)
-        
+
         # Match feature count to config
         X = np.random.randn(100, len(config.feature_columns))
         y = np.random.randn(100) * 60

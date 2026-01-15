@@ -1,7 +1,9 @@
-from typing import Any, Dict
-from dotenv import load_dotenv
 from pathlib import Path
+from typing import Any, Dict
+
 import pytest
+from dotenv import load_dotenv
+
 
 @pytest.fixture
 def sample_enriched_event() -> Dict[str, Any]:
@@ -42,7 +44,7 @@ def env_config(monkeypatch):
 @pytest.fixture(scope="session", autouse=True)
 def load_env():
     """
-    Automated Industry Practice: 
+    Automated Industry Practice:
     Load infra/.env into the process environment before any tests run.
     """
     env_path = Path(__file__).parent.parent / "infra" / "local" / ".env"

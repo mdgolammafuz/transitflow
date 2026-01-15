@@ -1,14 +1,14 @@
 """
 Unit tests for Serving components.
 
-Patterns: 
+Patterns:
 Distributed Tracing
 Circuit Breaker
 """
 
 import time
+
 import pytest
-from unittest.mock import Mock
 
 
 class TestCircuitBreakerConfig:
@@ -78,11 +78,7 @@ class TestCircuitBreaker:
 
     def test_opens_after_threshold(self):
         """Circuit opens after failure threshold."""
-        from serving.circuit_breaker import (
-            CircuitBreaker,
-            CircuitBreakerConfig,
-            CircuitState,
-        )
+        from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 
         config = CircuitBreakerConfig(failure_threshold=3)
         cb = CircuitBreaker("test", config)
@@ -98,11 +94,7 @@ class TestCircuitBreaker:
 
     def test_open_uses_fallback(self):
         """Open circuit uses fallback."""
-        from serving.circuit_breaker import (
-            CircuitBreaker,
-            CircuitBreakerConfig,
-            CircuitState,
-        )
+        from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 
         config = CircuitBreakerConfig(failure_threshold=1)
         cb = CircuitBreaker("test", config)
@@ -122,11 +114,7 @@ class TestCircuitBreaker:
 
     def test_open_raises_without_fallback(self):
         """Open circuit raises without fallback."""
-        from serving.circuit_breaker import (
-            CircuitBreaker,
-            CircuitBreakerConfig,
-            CircuitOpenError,
-        )
+        from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitOpenError
 
         config = CircuitBreakerConfig(failure_threshold=1)
         cb = CircuitBreaker("test", config)
@@ -142,11 +130,7 @@ class TestCircuitBreaker:
 
     def test_half_open_after_timeout(self):
         """Circuit becomes half-open after timeout."""
-        from serving.circuit_breaker import (
-            CircuitBreaker,
-            CircuitBreakerConfig,
-            CircuitState,
-        )
+        from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 
         config = CircuitBreakerConfig(
             failure_threshold=1,
@@ -170,11 +154,7 @@ class TestCircuitBreaker:
 
     def test_closes_after_success_threshold(self):
         """Circuit closes after success threshold in half-open."""
-        from serving.circuit_breaker import (
-            CircuitBreaker,
-            CircuitBreakerConfig,
-            CircuitState,
-        )
+        from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 
         config = CircuitBreakerConfig(
             failure_threshold=1,
@@ -195,11 +175,7 @@ class TestCircuitBreaker:
 
     def test_reset(self):
         """Manual reset closes circuit."""
-        from serving.circuit_breaker import (
-            CircuitBreaker,
-            CircuitBreakerConfig,
-            CircuitState,
-        )
+        from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 
         config = CircuitBreakerConfig(failure_threshold=1)
         cb = CircuitBreaker("test", config)
@@ -262,8 +238,8 @@ class TestCircuitBreakerRegistry:
     def test_reset_all(self):
         """Registry resets all breakers."""
         from serving.circuit_breaker import (
-            CircuitBreakerRegistry,
             CircuitBreakerConfig,
+            CircuitBreakerRegistry,
             CircuitState,
         )
 
@@ -382,7 +358,7 @@ class TestTracerGlobals:
 
     def test_init_tracer(self):
         """init_tracer creates new tracer."""
-        from serving.tracing import init_tracer, get_tracer
+        from serving.tracing import get_tracer, init_tracer
 
         tracer = init_tracer("test-service")
 
