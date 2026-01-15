@@ -3,13 +3,14 @@ Data models for HSL vehicle telemetry.
 """
 
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 # Geographic Bounds (Helsinki Region)
 MIN_LAT, MAX_LAT = 59.0, 61.0
 MIN_LON, MAX_LON = 23.0, 26.0
+
 
 class VehiclePosition(BaseModel):
     """
@@ -24,12 +25,12 @@ class VehiclePosition(BaseModel):
     speed_ms: float = Field(ge=0, le=40, description="Speed in m/s")
     heading: int = Field(ge=0, le=360, description="Heading in degrees")
     delay_seconds: int = Field(description="Schedule deviation in seconds")
-    
+
     # True=open, False=closed
     door_status: bool = Field(description="Door status")
-    
+
     odometer: Optional[int] = Field(default=None, description="Distance in meters")
-    
+
     next_stop_id: Optional[int] = Field(default=None)
     route_id: Optional[str] = Field(default=None)
     line_id: str = Field(description="Line number")
@@ -102,6 +103,7 @@ class RawHSLPayload(BaseModel):
 
 class InvalidEvent(BaseModel):
     """DLQ Event Model."""
+
     raw_payload: str
     error_message: str
     error_field: Optional[str] = None
