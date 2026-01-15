@@ -4,21 +4,23 @@ Hardened: Explicit schema search path and nearest-hour fallback.
 """
 
 import logging
-from typing import Dict, Optional, Any
-from dataclasses import dataclass
 from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 import psycopg2
+from psycopg2 import DatabaseError, OperationalError
 from psycopg2.extras import RealDictCursor
-from psycopg2 import OperationalError, DatabaseError
 
 from feature_store.config import FeatureStoreConfig
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class StopFeatures:
     """Historical features for a stop at a specific time context."""
+
     stop_id: str
     line_id: str
     hour_of_day: int
@@ -40,6 +42,7 @@ class StopFeatures:
             "historical_arrival_count": self.historical_arrival_count,
         }
 
+
 class OfflineStore:
     """PostgreSQL-based offline feature store."""
 
@@ -58,10 +61,10 @@ class OfflineStore:
                 connect_timeout=max(2, int(self._config.request_timeout_seconds)),
             )
             self._conn.autocommit = True
-            
+
             with self._conn.cursor() as cur:
                 cur.execute(f"SET search_path TO {self._config.postgres_schema}, public")
-            
+
             logger.info(f"Connected to PostgreSQL. Schema: {self._config.postgres_schema}")
         except OperationalError as e:
             logger.error("Failed to connect to PostgreSQL: %s", e)
@@ -91,25 +94,27 @@ class OfflineStore:
         finally:
             cur.close()
 
-    def get_stop_features(self, stop_id: str, hour_of_day: int, day_of_week: int) -> Optional[StopFeatures]:
+    def get_stop_features(
+        self, stop_id: str, hour_of_day: int, day_of_week: int
+    ) -> Optional[StopFeatures]:
         """
         Retrieves historical features from the dbt mart.
         Matches stop_id and provides nearest-hour fallback for robustness.
         """
         query = """
-            SELECT 
-                stop_id, 
+            SELECT
+                stop_id,
                 line_id,
-                hour_of_day, 
+                hour_of_day,
                 day_of_week,
-                historical_avg_delay, 
+                historical_avg_delay,
                 historical_stddev_delay,
-                avg_dwell_time_ms, 
+                avg_dwell_time_ms,
                 historical_arrival_count
             FROM fct_stop_arrivals
             WHERE stop_id = %s
-            ORDER BY 
-                (hour_of_day = %s AND day_of_week = %s) DESC, 
+            ORDER BY
+                (hour_of_day = %s AND day_of_week = %s) DESC,
                 ABS(hour_of_day - %s) ASC
             LIMIT 1
         """
@@ -117,20 +122,20 @@ class OfflineStore:
             with self._cursor() as cur:
                 cur.execute(query, (str(stop_id), hour_of_day, day_of_week, hour_of_day))
                 row = cur.fetchone()
-                
+
                 if not row:
                     logger.warning(f"No database record found for stop_id {stop_id}")
                     return None
-                
+
                 return StopFeatures(
                     stop_id=str(row["stop_id"]),
-                    line_id=str(row.get("line_id", "UNKNOWN")), 
+                    line_id=str(row.get("line_id", "UNKNOWN")),
                     hour_of_day=int(row["hour_of_day"]),
                     day_of_week=int(row["day_of_week"]),
                     historical_avg_delay=float(row.get("historical_avg_delay") or 0.0),
                     historical_stddev_delay=float(row.get("historical_stddev_delay") or 0.0),
                     avg_dwell_time_seconds=float((row.get("avg_dwell_time_ms") or 0.0) / 1000.0),
-                    historical_arrival_count=int(row.get("historical_arrival_count") or 0)
+                    historical_arrival_count=int(row.get("historical_arrival_count") or 0),
                 )
         except Exception as e:
             logger.error(f"PostgreSQL fetch crash: {e}")

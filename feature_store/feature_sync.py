@@ -5,10 +5,10 @@ Pattern: Primary Key Upsert
 Security: Hardened JDBC properties
 """
 
-import argparse
 import logging
 import os
-from pyspark.sql import SparkSession, DataFrame
+
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 logging.basicConfig(
@@ -16,6 +16,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
 
 def get_spark_session() -> SparkSession:
     """Create Spark session with Delta Lake and PostgreSQL support."""
@@ -25,9 +26,14 @@ def get_spark_session() -> SparkSession:
 
     return (
         SparkSession.builder.appName("TransitFlow-FeatureSync")
-        .config("spark.jars.packages", "io.delta:delta-spark_2.12:3.0.0,org.postgresql:postgresql:42.6.0")
+        .config(
+            "spark.jars.packages",
+            "io.delta:delta-spark_2.12:3.0.0,org.postgresql:postgresql:42.6.0",
+        )
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        .config(
+            "spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+        )
         .config("spark.hadoop.fs.s3a.endpoint", minio_endpoint)
         .config("spark.hadoop.fs.s3a.access.key", minio_user)
         .config("spark.hadoop.fs.s3a.secret.key", minio_password)
@@ -35,6 +41,7 @@ def get_spark_session() -> SparkSession:
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .getOrCreate()
     )
+
 
 def read_stop_performance(spark: SparkSession, bucket: str) -> DataFrame:
     """Read from Delta Lake Gold and align with Postgres Mart schema."""
@@ -51,10 +58,13 @@ def read_stop_performance(spark: SparkSession, bucket: str) -> DataFrame:
         F.col("hour_of_day").cast("int"),
         F.col("day_of_week").cast("int"),
         F.col("avg_delay").cast("float").alias("historical_avg_delay"),
-        (F.col("stddev_delay") if "stddev_delay" in df.columns else F.lit(0.0)).cast("float").alias("historical_stddev_delay"),
+        (F.col("stddev_delay") if "stddev_delay" in df.columns else F.lit(0.0))
+        .cast("float")
+        .alias("historical_stddev_delay"),
         F.col("avg_dwell_time_ms").cast("float").alias("avg_dwell_time_ms"),
-        F.col("arrival_count").cast("long").alias("historical_arrival_count")
+        F.col("arrival_count").cast("long").alias("historical_arrival_count"),
     ).na.fill(0.0)
+
 
 def write_to_postgres(df: DataFrame) -> int:
     """Execute Atomic Upsert using feature_id Primary Key."""
@@ -63,7 +73,7 @@ def write_to_postgres(df: DataFrame) -> int:
     db = os.environ.get("POSTGRES_DB", "transit")
     user = os.environ.get("POSTGRES_USER", "transit")
     password = os.environ.get("POSTGRES_PASSWORD", "transit_secure_local")
-    
+
     jdbc_url = f"jdbc:postgresql://{host}:{port}/{db}"
     properties = {"user": user, "password": password, "driver": "org.postgresql.Driver"}
 
@@ -75,25 +85,26 @@ def write_to_postgres(df: DataFrame) -> int:
     upsert_sql = """
         INSERT INTO marts.fct_stop_arrivals (
             feature_id, stop_id, line_id, hour_of_day, day_of_week,
-            historical_arrival_count, historical_avg_delay, 
+            historical_arrival_count, historical_avg_delay,
             historical_stddev_delay, historical_on_time_pct, avg_dwell_time_ms
         )
-        SELECT 
+        SELECT
             md5(stop_id || line_id || hour_of_day || day_of_week) as feature_id,
             stop_id, line_id, hour_of_day, day_of_week,
             historical_arrival_count, historical_avg_delay,
             historical_stddev_delay, 100.0 as historical_on_time_pct,
             avg_dwell_time_ms
         FROM marts.fct_stop_arrivals_staging
-        ON CONFLICT (feature_id) 
+        ON CONFLICT (feature_id)
         DO UPDATE SET
             historical_arrival_count = EXCLUDED.historical_arrival_count,
             historical_avg_delay = EXCLUDED.historical_avg_delay,
             historical_stddev_delay = EXCLUDED.historical_stddev_delay,
             avg_dwell_time_ms = EXCLUDED.avg_dwell_time_ms;
     """
-    
+
     import psycopg2
+
     logger.info("Executing Upsert on production table: marts.fct_stop_arrivals")
     conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=db)
     try:
@@ -104,6 +115,7 @@ def write_to_postgres(df: DataFrame) -> int:
         conn.close()
 
     return df.count()
+
 
 def run_feature_sync(bucket: str = "transitflow-lakehouse") -> dict:
     spark = get_spark_session()
@@ -117,6 +129,7 @@ def run_feature_sync(bucket: str = "transitflow-lakehouse") -> dict:
         return {"status": "failed", "error": str(e)}
     finally:
         spark.stop()
+
 
 if __name__ == "__main__":
     run_feature_sync()

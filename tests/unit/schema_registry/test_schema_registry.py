@@ -4,9 +4,10 @@ Consistent with fastavro implementation and strict security.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+
 from src.schema_registry.client import SchemaRegistryClient, SchemaRegistryError
 from src.schema_registry.validator import SchemaValidator
+
 
 class TestSchemaRegistryClient:
     """Tests for hardened SchemaRegistryClient."""
@@ -20,6 +21,7 @@ class TestSchemaRegistryClient:
     def test_client_initialization_custom_url(self):
         client = SchemaRegistryClient("http://custom:9999")
         assert client.url == "http://custom:9999"
+
 
 class TestSchemaValidator:
     """Tests for fastavro-based SchemaValidator."""
@@ -35,20 +37,16 @@ class TestSchemaValidator:
         We mock the internal parsed cache to avoid network calls.
         """
         from fastavro.schema import parse_schema
-        
-        raw_schema = {
-            "type": "record",
-            "name": "Test",
-            "fields": [{"name": "id", "type": "int"}]
-        }
-        
+
+        raw_schema = {"type": "record", "name": "Test", "fields": [{"name": "id", "type": "int"}]}
+
         # Consistent with our hardened validator internal naming
         validator._parsed_schema_cache["test-value"] = parse_schema(raw_schema)
-        
+
         # Valid case
         is_valid, error = validator.validate("test-value", {"id": 123})
         assert is_valid is True
-        
+
         # Invalid case (string instead of int)
         is_valid, error = validator.validate("test-value", {"id": "wrong"})
         assert is_valid is False
