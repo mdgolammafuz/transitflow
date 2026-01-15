@@ -104,35 +104,69 @@ services:
     depends_on:
       - flink-jobmanager
 
- # batch job: spark
-
-  # infra/local/docker-compose.yml
-
+  # --- Model Tracking ---
+  mlflow:
+    image: python:3.9-slim
+    container_name: mlflow
+    ports:
+      - "5001:5000"
+    volumes:
+      - ../../mlruns:/mlflow
+    command: >
+      /bin/bash -c "pip install --no-cache-dir mlflow==2.10.2 && 
+      mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root /mlflow"
+  # --- Batch Processing & ML Training (Spark) ---
   spark-master:
     image: apache/spark:3.5.0
     container_name: spark-master
     user: root
-    # ... existing environment and ports ...
+    environment:
+      SPARK_MODE: master
+      PYSPARK_PYTHON: python3
+      PYTHONPATH: /opt/spark/jobs
+      MLFLOW_TRACKING_URI: http://mlflow:5000
     command: >
-      sh -c "pip3 install psycopg2-binary && 
-             /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master"
+      /bin/bash -c "
+      pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny && 
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      "
     volumes:
       - ../../spark:/opt/spark/jobs/spark
       - ../../feature_store:/opt/spark/jobs/feature_store
       - ../../src:/opt/spark/jobs/src
+      - ../../scripts:/opt/spark/jobs/scripts
+      - ../../ml_pipeline:/opt/spark/jobs/ml_pipeline
+    ports:
+      - "7077:7077"
+      - "8083:8080"
+    depends_on:
+      - mlflow
 
   spark-worker:
     image: apache/spark:3.5.0
     container_name: spark-worker
     user: root
-    # ... existing environment ...
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 1536M
+      PYSPARK_PYTHON: python3
+      PYTHONPATH: /opt/spark/jobs
+      MLFLOW_TRACKING_URI: http://mlflow:5000
     command: >
-      sh -c "pip3 install psycopg2-binary && 
-             /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077"
+      /bin/bash -c "
+      pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny && 
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+      "
     volumes:
       - ../../spark:/opt/spark/jobs/spark
       - ../../feature_store:/opt/spark/jobs/feature_store
       - ../../src:/opt/spark/jobs/src
+      - ../../scripts:/opt/spark/jobs/scripts
+      - ../../ml_pipeline:/opt/spark/jobs/ml_pipeline
+    depends_on:
+      - spark-master
+      - mlflow
 
 # Storage
   minio:

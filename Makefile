@@ -2,7 +2,8 @@
         verify-pipeline run run-full flink-build flink-submit \
         spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
         dbt-run dbt-test dbt-docs schema-register schema-check schema-list \
-        feature-api feature-sync feature-verify feature-test
+        feature-api feature-sync feature-verify feature-test \
+        serving-api train-model serving-verify serving-test
 
 # --- Configuration ---
 # Loads credentials and service names from infra/local/.env
@@ -14,8 +15,7 @@ SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-
 
 # --- Environment Contexts ---
 
-# LOCAL_ENV: For tools running directly on your Mac (dbt, API, Scripts)
-# Hardened: Explicitly passes credentials to handle Redis/Postgres authentication
+# LOCAL_ENV: For tools running directly on your Mac (dbt, API, Scripts, Serving)
 LOCAL_ENV := POSTGRES_USER=$(POSTGRES_USER) \
              POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
              POSTGRES_DB=$(POSTGRES_DB) \
@@ -26,7 +26,9 @@ LOCAL_ENV := POSTGRES_USER=$(POSTGRES_USER) \
              REDIS_PORT=$(REDIS_PORT) \
              REDIS_PASSWORD=$(REDIS_PASSWORD) \
              SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
-             FEATURE_API_URL=http://localhost:8000
+             FEATURE_API_URL=http://localhost:8000 \
+             SERVING_API_URL=http://localhost:8001 \
+             OTLP_ENDPOINT=http://localhost:4317
 
 # DB_ENV: For tools running inside Docker (Spark)
 DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
@@ -52,7 +54,7 @@ help:
 	@echo ""
 	@echo "Quality & Validation:"
 	@echo "  make lint               Auto-format and check PEP8 compliance"
-	@echo "  make test-all           Run all unit tests (Registry, Contracts, Spark, Feature Store)"
+	@echo "  make test-all           Run all unit tests (Registry, Contracts, Spark, Feature Store, ML)"
 	@echo "  make verify-pipeline    Run complete end-to-end integrity suite"
 	@echo ""
 	@echo "Infrastructure:"
@@ -74,6 +76,7 @@ help:
 	@echo "  make spark-bronze       Stream Kafka data to Delta Lake Bronze"
 	@echo "  make spark-silver       Run Silver-layer cleaning transformations"
 	@echo "  make spark-gold         Execute Gold-layer business aggregations"
+	@echo "  make spark-reconcile    Run data reconciliation between Bronze and Silver"
 	@echo ""
 	@echo "Warehouse & Transformation (dbt):"
 	@echo "  make dbt-seed           Load static reference data (GTFS)"
@@ -82,11 +85,14 @@ help:
 	@echo "  make dbt-test           Execute data contract validation tests"
 	@echo "  make dbt-docs           Generate and serve data catalog/lineage"
 	@echo ""
-	@echo "Feature Store & ML Serving:"
-	@echo "  make feature-api        Launch FastAPI Feature Serving API"
+	@echo "Feature Store & ML Serving (Phase 5 & 6):"
+	@echo "  make feature-api        Launch FastAPI Feature Serving API (Port 8000)"
 	@echo "  make feature-sync       Sync Delta Lake Gold to PostgreSQL Marts"
-	@echo "  make feature-verify     Run Feature Store integration verification"
-	@echo "  make feature-test       Run Feature Store unit tests"
+	@echo "  make feature-verify     Verify Feature Store integration"
+	@echo "  make train-model        Execute ML Training Pipeline (XGBoost)"
+	@echo "  make serving-api        Launch ML Prediction API (Port 8001)"
+	@echo "  make serving-verify     Run comprehensive Phase 6 verification"
+	@echo "  make serving-test       Run unit tests for ML and Serving"
 
 # --- Infrastructure Management ---
 dev-up:
@@ -105,10 +111,23 @@ topics:
 	docker exec -it redpanda rpk topic create fleet.telemetry.dlq --partitions 1 2>/dev/null || true
 
 # --- Quality Assurance ---
+.PHONY: lint
 lint:
-	isort feature_store/ scripts/ tests/ src/
-	black feature_store/ scripts/ tests/ src/
-	ruff check feature_store/ scripts/ tests/ src/
+	@echo "Running Import Sort (isort)..."
+	isort feature_store/ serving/ ml_pipeline/ scripts/ tests/ src/
+	
+	@echo "Running Formatter (black)..."
+	black feature_store/ serving/ ml_pipeline/ scripts/ tests/ src/
+	
+	@echo "Running Linter (ruff)..."
+	ruff check feature_store/ serving/ ml_pipeline/ scripts/ tests/ src/ --fix
+	
+	@echo "Running Security Scan (bandit)..."
+	# -r: recursive, -ll: only high severity, -c: use config from pyproject.toml
+	bandit -r feature_store/ serving/ ml_pipeline/ scripts/ src/ -c pyproject.toml
+	
+	@echo "Running Static Type Checker (mypy)..."
+	mypy feature_store/ serving/ ml_pipeline/ scripts/ src/
 
 test-all:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/ -v
@@ -174,12 +193,10 @@ dbt-docs:
 	@echo "Serving documentation at http://localhost:8085"
 	$(DBT) docs serve --port 8085
 
-# --- Feature Store & ML Serving ---
-# Hardened: Uses LOCAL_ENV to ensure API can connect to Redis/Postgres with correct passwords
+# --- Feature Store & ML Serving (Phase 5 & 6) ---
 feature-api:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 feature_store/api.py
 
-# Sync Gold Marts from Delta Lake to PostgreSQL
 feature-sync:
 	$(SPARK_SUBMIT) /opt/spark/jobs/feature_store/feature_sync.py
 
@@ -188,6 +205,20 @@ feature-verify:
 
 feature-test:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/feature_store/ -v
+
+train-model:
+	@echo "Starting ML Training Pipeline..."
+	$(SPARK_SUBMIT) /opt/spark/jobs/scripts/train_model.py
+
+serving-api:
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 serving/api.py
+
+serving-verify:
+	@echo "Running Phase 6 Smoke Tests..."
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/smoke_test_ml_serving.py --check-all
+
+serving-test:
+	PYTHONPATH=$(CURDIR) pytest tests/unit/ml_pipeline/ tests/unit/serving/ -v
 
 # --- Orchestrated Verification ---
 verify-pipeline:
