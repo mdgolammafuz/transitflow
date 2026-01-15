@@ -1,5 +1,6 @@
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
+
 from fastavro import validate as avro_validate
 from fastavro.schema import parse_schema
 
@@ -7,16 +8,17 @@ from .client import SchemaRegistryClient, SchemaRegistryError
 
 logger = logging.getLogger(__name__)
 
+
 class SchemaValidator:
     """
     Validates messages against Schema Registry using audited Avro logic.
     """
-    
+
     def __init__(self, registry_url: Optional[str] = None):
         self.client = SchemaRegistryClient(registry_url)
         # Using a parsed schema cache to improve performance
         self._parsed_schema_cache: Dict[str, Any] = {}
-    
+
     def _get_parsed_schema(self, subject: str) -> Any:
         """Retrieves and parses schema, caching the parsed result."""
         if subject not in self._parsed_schema_cache:
@@ -27,9 +29,9 @@ class SchemaValidator:
             except Exception as e:
                 logger.error(f"Failed to resolve schema for subject {subject}: {str(e)}")
                 raise SchemaRegistryError(f"Validation impossible: {subject} schema unavailable")
-        
+
         return self._parsed_schema_cache[subject]
-    
+
     def validate(self, subject: str, message: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """
         Validates message against the contract defined in the Registry.

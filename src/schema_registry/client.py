@@ -2,35 +2,40 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
-from urllib.request import urlopen, Request
+from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class SchemaInfo:
     """Information about a registered schema (Immutable)."""
+
     subject: str
     version: int
     schema_id: int
     schema: Dict[str, Any]
 
+
 class SchemaRegistryError(Exception):
     """Base exception for Schema Registry operations."""
+
     pass
+
 
 class SchemaRegistryClient:
     """
     Hardened client for interacting with Schema Registry.
     """
-    
+
     def __init__(self, url: Optional[str] = None):
         # Strict configuration: fail fast if no URL is provided/found
         self.url = url or os.environ.get("SCHEMA_REGISTRY_URL")
         if not self.url:
             raise SchemaRegistryError("SCHEMA_REGISTRY_URL environment variable is not set")
-            
+
         self.url = self.url.rstrip("/")
         self._timeout = int(os.environ.get("SCHEMA_REGISTRY_TIMEOUT", "10"))
 
@@ -40,10 +45,10 @@ class SchemaRegistryClient:
             "Content-Type": "application/vnd.schemaregistry.v1+json",
             "Accept": "application/vnd.schemaregistry.v1+json",
         }
-        
+
         body = json.dumps(data).encode("utf-8") if data else None
         request = Request(url, data=body, headers=headers, method=method)
-        
+
         try:
             with urlopen(request, timeout=self._timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
@@ -56,7 +61,9 @@ class SchemaRegistryClient:
             logger.critical(f"Network connectivity issue with Schema Registry: {e.reason}")
             raise SchemaRegistryError("Failed to connect to Schema Registry")
 
-    def register_schema(self, subject: str, schema: Dict[str, Any], schema_type: str = "AVRO") -> int:
+    def register_schema(
+        self, subject: str, schema: Dict[str, Any], schema_type: str = "AVRO"
+    ) -> int:
         data = {"schema": json.dumps(schema), "schemaType": schema_type}
         result = self._request(f"/subjects/{subject}/versions", method="POST", data=data)
         return result["id"]
@@ -81,6 +88,7 @@ class SchemaRegistryClient:
             return True
         except SchemaRegistryError:
             return False
+
     def list_subjects(self) -> List[str]:
         """Returns the list of registered subjects."""
         # The _request method already handles the JSON parsing
@@ -91,9 +99,7 @@ class SchemaRegistryClient:
         data = {"schema": json.dumps(schema)}
         try:
             result = self._request(
-                f"/compatibility/subjects/{subject}/versions/latest", 
-                method="POST", 
-                data=data
+                f"/compatibility/subjects/{subject}/versions/latest", method="POST", data=data
             )
             return result.get("is_compatible", False)
         except SchemaRegistryError:
