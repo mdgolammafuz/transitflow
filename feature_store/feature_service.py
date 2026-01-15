@@ -1,13 +1,8 @@
 """
 Feature Service - Unified Feature Access.
 
-Pattern:
-Semantic Interface
-ML Reproducibility
-
-Combines online (Redis) and offline (PostgreSQL) features into a unified
-interface. Ensures training-serving consistency by using the same feature
-computation logic and default values.
+Pattern: Semantic Interface & ML Reproducibility
+Combines online (Redis) and offline (PostgreSQL) features into a unified interface.
 """
 
 import logging
@@ -52,62 +47,59 @@ class CombinedFeatures:
     def to_feature_vector(self) -> Dict[str, Any]:
         """
         Convert to flat feature vector for ML model.
-        Hardened: Uses None/Null for missing coordinates instead of 0.0 to prevent
-        data corruption in the prediction layer.
+        Aligned with Phase 6 'historical_avg_delay' contract and coordinate fallback.
         """
         features: Dict[str, Any] = {
             "vehicle_id": self.vehicle_id,
         }
 
-        # Online (Real-time) Logic
+        # 1. Real-time (Online) features
         if self.online:
-            features.update(
-                {
-                    "current_delay": self.online.current_delay,
-                    "delay_trend": self.online.delay_trend,
-                    "current_speed": self.online.current_speed,
-                    "speed_trend": self.online.speed_trend,
-                    "is_stopped": 1 if self.online.is_stopped else 0,
-                    "stopped_duration_ms": self.online.stopped_duration_ms,
-                    "latitude": self.online.latitude,
-                    "longitude": self.online.longitude,
-                    "feature_age_ms": self.online.feature_age_ms,
-                }
-            )
+            features.update({
+                "current_delay": self.online.current_delay,
+                "delay_trend": self.online.delay_trend,
+                "current_speed": self.online.current_speed,
+                "speed_trend": self.online.speed_trend,
+                "is_stopped": 1 if self.online.is_stopped else 0,
+                "stopped_duration_ms": self.online.stopped_duration_ms,
+                "latitude": self.online.latitude,
+                "longitude": self.online.longitude,
+                "feature_age_ms": self.online.feature_age_ms,
+            })
         else:
-            features.update(
-                {
-                    "current_delay": 0,
-                    "delay_trend": 0.0,
-                    "current_speed": 0.0,
-                    "speed_trend": 0.0,
-                    "is_stopped": 0,
-                    "stopped_duration_ms": 0,
-                    "latitude": None,
-                    "longitude": None,
-                    "feature_age_ms": -1,
-                }
-            )
+            # Defaults for missing online data
+            features.update({
+                "current_delay": 0,
+                "delay_trend": 0.0,
+                "current_speed": 0.0,
+                "speed_trend": 0.0,
+                "is_stopped": 0,
+                "stopped_duration_ms": 0,
+                "latitude": None,
+                "longitude": None,
+                "feature_age_ms": -1,
+            })
 
-        # Offline (Historical) Logic
+        # 2. Historical (Offline) features - Using updated 'historical' naming
         if self.offline:
-            features.update(
-                {
-                    "historical_avg_delay": self.offline.avg_delay_seconds,
-                    "historical_stddev_delay": self.offline.stddev_delay_seconds,
-                    "historical_p90_delay": self.offline.p90_delay_seconds,
-                    "historical_sample_count": self.offline.sample_count,
-                }
-            )
+            # Fallback Logic: If GPS (online) is missing, use historical stop coordinates
+            if features["latitude"] is None:
+                features["latitude"] = self.offline.latitude
+                features["longitude"] = self.offline.longitude
+
+            features.update({
+                "historical_avg_delay": self.offline.historical_avg_delay,
+                "historical_stddev_delay": self.offline.historical_stddev_delay,
+                "avg_dwell_time_ms": self.offline.avg_dwell_time_seconds * 1000.0,
+                "historical_arrival_count": self.offline.historical_arrival_count,
+            })
         else:
-            features.update(
-                {
-                    "historical_avg_delay": 0.0,
-                    "historical_stddev_delay": 0.0,
-                    "historical_p90_delay": 0.0,
-                    "historical_sample_count": 0,
-                }
-            )
+            features.update({
+                "historical_avg_delay": 0.0,
+                "historical_stddev_delay": 0.0,
+                "avg_dwell_time_ms": 0.0,
+                "historical_arrival_count": 0,
+            })
 
         return features
 
@@ -173,17 +165,12 @@ class FeatureService:
         hour_of_day: Optional[int] = None,
         day_of_week: Optional[int] = None,
     ) -> CombinedFeatures:
-        """
-        Orchestrates retrieval with context inference and fallback.
-        """
+        """Orchestrates retrieval with context inference and fallback."""
         now = datetime.now(timezone.utc)
         request_timestamp = int(now.timestamp() * 1000)
 
-        # Consistent context inference
+        # Context inference
         h_ctx = hour_of_day if hour_of_day is not None else now.hour
-
-        # Align with SQL/DBT: Python's weekday() is 0-6 (Mon-Sun)
-        # We pass this to the offline_store which uses fallback logic for 0-7 compatibility
         d_ctx = day_of_week if day_of_week is not None else now.weekday()
 
         online_data = None
@@ -195,7 +182,6 @@ class FeatureService:
             online_data = self._online_store.get_features(vehicle_id)
             if online_data:
                 self._metrics.online_hits += 1
-                # Context propagation
                 if stop_id is None and online_data.next_stop_id:
                     stop_id = str(online_data.next_stop_id)
                 if line_id is None:

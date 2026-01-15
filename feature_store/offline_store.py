@@ -25,6 +25,8 @@ class StopFeatures:
     line_id: str
     hour_of_day: int
     day_of_week: int
+    latitude: float
+    longitude: float
     historical_avg_delay: float
     historical_stddev_delay: float
     avg_dwell_time_seconds: float
@@ -36,6 +38,8 @@ class StopFeatures:
             "line_id": self.line_id,
             "hour_of_day": self.hour_of_day,
             "day_of_week": self.day_of_week,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
             "historical_avg_delay": self.historical_avg_delay,
             "historical_stddev_delay": self.historical_stddev_delay,
             "avg_dwell_time_seconds": self.avg_dwell_time_seconds,
@@ -101,12 +105,15 @@ class OfflineStore:
         Retrieves historical features from the dbt mart.
         Matches stop_id and provides nearest-hour fallback for robustness.
         """
+        # UPDATED QUERY: Included latitude and longitude
         query = """
             SELECT
                 stop_id,
                 line_id,
                 hour_of_day,
                 day_of_week,
+                latitude,
+                longitude,
                 historical_avg_delay,
                 historical_stddev_delay,
                 avg_dwell_time_ms,
@@ -132,6 +139,8 @@ class OfflineStore:
                     line_id=str(row.get("line_id", "UNKNOWN")),
                     hour_of_day=int(row["hour_of_day"]),
                     day_of_week=int(row["day_of_week"]),
+                    latitude=float(row.get("latitude") or 0.0),
+                    longitude=float(row.get("longitude") or 0.0),
                     historical_avg_delay=float(row.get("historical_avg_delay") or 0.0),
                     historical_stddev_delay=float(row.get("historical_stddev_delay") or 0.0),
                     avg_dwell_time_seconds=float((row.get("avg_dwell_time_ms") or 0.0) / 1000.0),
