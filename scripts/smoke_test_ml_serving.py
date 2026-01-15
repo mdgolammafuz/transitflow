@@ -16,8 +16,8 @@ import json
 import os
 import sys
 import time
-from urllib.request import urlopen, Request
 from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 
@@ -28,7 +28,7 @@ def check_ml_training():
 
     try:
         from ml_pipeline.config import MLConfig
-        from ml_pipeline.training import DelayPredictor, train_model
+        from ml_pipeline.training import train_model
 
         config = MLConfig.default()
 
@@ -37,7 +37,7 @@ def check_ml_training():
 
         predictor, result = train_model(config, X, y, delta_version=1)
 
-        print(f"  [OK] Model trained successfully")
+        print("  [OK] Model trained successfully")
         print(f"  [OK] Train MAE: {result.train_mae:.2f}s")
         print(f"  [OK] Test MAE: {result.test_mae:.2f}s")
         print(f"  [OK] R2 Score: {result.r2_score:.3f}")
@@ -63,6 +63,7 @@ def check_model_save_load():
 
     try:
         import tempfile
+
         from ml_pipeline.config import MLConfig
         from ml_pipeline.training import DelayPredictor
 
@@ -85,7 +86,7 @@ def check_model_save_load():
         print(f"  [OK] Model loaded from {model_path}")
 
         assert new_predictor.is_trained
-        print(f"  [OK] Loaded model is trained")
+        print("  [OK] Loaded model is trained")
 
         os.unlink(model_path)
 
@@ -103,11 +104,7 @@ def check_circuit_breaker():
     print("\n=== Check 3: Circuit Breaker ===")
 
     try:
-        from serving.circuit_breaker import (
-            CircuitBreaker,
-            CircuitBreakerConfig,
-            CircuitState,
-        )
+        from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 
         config = CircuitBreakerConfig(
             failure_threshold=3,
@@ -118,7 +115,7 @@ def check_circuit_breaker():
         result = cb.call(lambda: "success")
         assert result == "success"
         assert cb.state == CircuitState.CLOSED
-        print(f"  [OK] Successful call keeps circuit closed")
+        print("  [OK] Successful call keeps circuit closed")
 
         def failing():
             raise Exception("test error")
@@ -126,7 +123,7 @@ def check_circuit_breaker():
         for i in range(3):
             try:
                 cb.call(failing)
-            except:
+            except Exception:
                 pass
 
         assert cb.state == CircuitState.OPEN
@@ -134,11 +131,11 @@ def check_circuit_breaker():
 
         fallback_result = cb.call(failing, fallback=lambda: "fallback")
         assert fallback_result == "fallback"
-        print(f"  [OK] Open circuit uses fallback")
+        print("  [OK] Open circuit uses fallback")
 
         time.sleep(0.15)
         cb.call(lambda: "success")
-        print(f"  [OK] Circuit recovers after timeout")
+        print("  [OK] Circuit recovers after timeout")
 
         print("PASS: Circuit breaker works")
         return True
@@ -198,7 +195,7 @@ def check_serving_api_health():
         model_version = data.get("model_version")
         circuits = data.get("circuit_breakers", {})
 
-        print(f"  [OK] API responding")
+        print("  [OK] API responding")
         print(f"  [OK] Status: {status}")
         print(f"  [OK] Model loaded: {model_loaded}")
         print(f"  [OK] Model version: {model_version}")
@@ -221,11 +218,13 @@ def check_prediction():
     api_url = os.environ.get("SERVING_API_URL", "http://localhost:8001")
 
     try:
-        request_data = json.dumps({
-            "vehicle_id": 1362,
-            "stop_id": 12345,
-            "line_id": "600",
-        }).encode()
+        request_data = json.dumps(
+            {
+                "vehicle_id": 1362,
+                "stop_id": 12345,
+                "line_id": "600",
+            }
+        ).encode()
 
         req = Request(
             f"{api_url}/predict",
@@ -242,7 +241,7 @@ def check_prediction():
         model_version = data.get("model_version")
         trace_id = data.get("trace_id")
 
-        print(f"  [OK] Prediction successful")
+        print("  [OK] Prediction successful")
         print(f"  [OK] Predicted delay: {predicted}s")
         print(f"  [OK] Latency: {latency}ms")
         print(f"  [OK] Model version: {model_version}")
@@ -268,7 +267,7 @@ def check_circuits_endpoint():
         response = urlopen(f"{api_url}/circuits", timeout=5)
         data = json.loads(response.read().decode())
 
-        print(f"  [OK] Circuits endpoint responding")
+        print("  [OK] Circuits endpoint responding")
         for name, stats in data.items():
             state = stats.get("state", "unknown")
             calls = stats.get("total_calls", 0)

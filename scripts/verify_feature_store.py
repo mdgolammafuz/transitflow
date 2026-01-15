@@ -14,12 +14,11 @@ import argparse
 import json
 import os
 import sys
-import time
-from urllib.request import urlopen, Request
 from urllib.error import URLError
+from urllib.request import urlopen
 
-import redis
 import psycopg2
+import redis
 
 
 def check_redis():
@@ -39,8 +38,9 @@ def check_redis():
         count = 0
         for _ in client.scan_iter(match=pattern, count=100):
             count += 1
-            if count >= 100: break # Cap for verification speed
-            
+            if count >= 100:
+                break  # Cap for verification speed
+
         print(f"  [OK] Active vehicle features found (sampled): {count}")
         return True
 
@@ -70,11 +70,13 @@ def check_postgres():
         )
 
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT COUNT(*) FROM information_schema.tables 
-                WHERE table_schema = 'features' 
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = 'features'
                   AND table_name = 'stop_historical'
-            """)
+            """
+            )
             if cur.fetchone()[0] > 0:
                 print("  [OK] features.stop_historical table exists")
                 cur.execute("SELECT COUNT(*) FROM features.stop_historical")
@@ -103,7 +105,7 @@ def check_api_health():
         print(f"  [OK] API Status: {data.get('status')}")
         print(f"  [OK] Online Store: {data.get('online_store')}")
         print(f"  [OK] Offline Store: {data.get('offline_store')}")
-        
+
         return data.get("status") == "healthy"
     except URLError as e:
         print(f"  [FAIL] API not responding at {api_url}: {e}")
@@ -131,7 +133,7 @@ def check_feature_retrieval(vehicle_id: int = 1362):
 def main():
     parser = argparse.ArgumentParser(description="Feature Store Verification")
     parser.add_argument("--check-all", action="store_true")
-    args = parser.parse_args()
+    parser.parse_args()
 
     print("=" * 50)
     print("FEATURE STORE INTEGRATION VERIFICATION")
@@ -141,17 +143,18 @@ def main():
         "Redis": check_redis(),
         "PostgreSQL": check_postgres(),
         "API Health": check_api_health(),
-        "Retrieval": check_feature_retrieval()
+        "Retrieval": check_feature_retrieval(),
     }
 
     print("\n" + "=" * 50)
     print("VERIFICATION SUMMARY")
     print("=" * 50)
-    
+
     all_passed = True
     for name, success in results.items():
         status = "[PASS]" if success else "[FAIL]"
-        if not success: all_passed = False
+        if not success:
+            all_passed = False
         print(f"  {name:15} {status}")
 
     if all_passed:
