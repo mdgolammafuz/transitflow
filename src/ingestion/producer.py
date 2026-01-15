@@ -7,7 +7,7 @@ import sys
 from typing import Optional
 
 try:
-    from confluent_kafka import Producer, KafkaError, Message
+    from confluent_kafka import KafkaError, Message, Producer
 except ImportError:
     print("CRITICAL: confluent-kafka not installed.")
     sys.exit(1)
@@ -17,6 +17,7 @@ from .metrics import get_metrics
 from .models import InvalidEvent, VehiclePosition
 
 logger = logging.getLogger(__name__)
+
 
 class TelemetryProducer:
     """
@@ -38,7 +39,7 @@ class TelemetryProducer:
             "batch.size": self.config.batch_size,
             "compression.type": "zstd",
         }
-        
+
         try:
             producer = Producer(conf)
             logger.info("Kafka producer initialized: %s", self.config.bootstrap_servers)
@@ -60,14 +61,14 @@ class TelemetryProducer:
         try:
             key = str(position.vehicle_id).encode("utf-8")
             value = position.model_dump_json().encode("utf-8")
-            
+
             self._producer.produce(
                 topic=self.config.topic_raw,
                 key=key,
                 value=value,
                 callback=self._delivery_callback,
             )
-            
+
             # Serve delivery callbacks
             self._producer.poll(0)
 
@@ -84,7 +85,7 @@ class TelemetryProducer:
             except Exception:
                 self.metrics.record_kafka_error("buffer_overflow")
                 logger.error("Dropped message due to buffer overflow")
-                
+
         except Exception:
             self.metrics.record_kafka_error("serialization_error")
             logger.exception("Produce failed")

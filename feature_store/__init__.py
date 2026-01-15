@@ -1,7 +1,7 @@
 """
 Feature Store module.
 
-Pattern: 
+Pattern:
 Semantic Interface
 ML Reproducibility
 
@@ -10,9 +10,9 @@ with training-serving consistency guarantees.
 """
 
 from feature_store.config import FeatureStoreConfig
-from feature_store.online_store import OnlineStore
-from feature_store.offline_store import OfflineStore
 from feature_store.feature_service import FeatureService
+from feature_store.offline_store import OfflineStore
+from feature_store.online_store import OnlineStore
 
 __all__ = [
     "FeatureStoreConfig",

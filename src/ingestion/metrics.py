@@ -8,7 +8,7 @@ from prometheus_client import Counter, Gauge, Histogram, start_http_server
 class IngestMetrics:
     """
     Metrics collector for MQTT-to-Kafka bridge.
-    
+
     Counters track totals (always increasing).
     Gauges track current values (can go up/down).
     Histograms track distributions (latency, sizes).
@@ -20,7 +20,7 @@ class IngestMetrics:
             "transit_mqtt_connected",
             "MQTT connection status (1=connected, 0=disconnected)",
         )
-        
+
         # Message counters
         self.messages_received = Counter(
             "transit_messages_received_total",
@@ -48,7 +48,7 @@ class IngestMetrics:
             "Kafka producer errors",
             ["error_type"],
         )
-        
+
         # Gauges for current state
         self.active_vehicles = Gauge(
             "transit_active_vehicles",
@@ -58,7 +58,7 @@ class IngestMetrics:
             "transit_messages_per_second",
             "Current message rate",
         )
-        
+
         # Latency histograms
         self.mqtt_latency = Histogram(
             "transit_mqtt_latency_seconds",

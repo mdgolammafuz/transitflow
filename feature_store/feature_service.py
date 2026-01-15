@@ -1,23 +1,23 @@
 """
 Feature Service - Unified Feature Access.
 
-Pattern: 
+Pattern:
 Semantic Interface
 ML Reproducibility
 
-Combines online (Redis) and offline (PostgreSQL) features into a unified 
-interface. Ensures training-serving consistency by using the same feature 
+Combines online (Redis) and offline (PostgreSQL) features into a unified
+interface. Ensures training-serving consistency by using the same feature
 computation logic and default values.
 """
 
 import logging
-from typing import Dict, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from feature_store.config import FeatureStoreConfig
-from feature_store.online_store import OnlineStore, OnlineFeatures
 from feature_store.offline_store import OfflineStore, StopFeatures
+from feature_store.online_store import OnlineFeatures, OnlineStore
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class CombinedFeatures:
     def to_feature_vector(self) -> Dict[str, Any]:
         """
         Convert to flat feature vector for ML model.
-        Hardened: Uses None/Null for missing coordinates instead of 0.0 to prevent 
+        Hardened: Uses None/Null for missing coordinates instead of 0.0 to prevent
         data corruption in the prediction layer.
         """
         features: Dict[str, Any] = {
@@ -61,45 +61,53 @@ class CombinedFeatures:
 
         # Online (Real-time) Logic
         if self.online:
-            features.update({
-                "current_delay": self.online.current_delay,
-                "delay_trend": self.online.delay_trend,
-                "current_speed": self.online.current_speed,
-                "speed_trend": self.online.speed_trend,
-                "is_stopped": 1 if self.online.is_stopped else 0,
-                "stopped_duration_ms": self.online.stopped_duration_ms,
-                "latitude": self.online.latitude,
-                "longitude": self.online.longitude,
-                "feature_age_ms": self.online.feature_age_ms,
-            })
+            features.update(
+                {
+                    "current_delay": self.online.current_delay,
+                    "delay_trend": self.online.delay_trend,
+                    "current_speed": self.online.current_speed,
+                    "speed_trend": self.online.speed_trend,
+                    "is_stopped": 1 if self.online.is_stopped else 0,
+                    "stopped_duration_ms": self.online.stopped_duration_ms,
+                    "latitude": self.online.latitude,
+                    "longitude": self.online.longitude,
+                    "feature_age_ms": self.online.feature_age_ms,
+                }
+            )
         else:
-            features.update({
-                "current_delay": 0,
-                "delay_trend": 0.0,
-                "current_speed": 0.0,
-                "speed_trend": 0.0,
-                "is_stopped": 0,
-                "stopped_duration_ms": 0,
-                "latitude": None, 
-                "longitude": None,
-                "feature_age_ms": -1,
-            })
+            features.update(
+                {
+                    "current_delay": 0,
+                    "delay_trend": 0.0,
+                    "current_speed": 0.0,
+                    "speed_trend": 0.0,
+                    "is_stopped": 0,
+                    "stopped_duration_ms": 0,
+                    "latitude": None,
+                    "longitude": None,
+                    "feature_age_ms": -1,
+                }
+            )
 
         # Offline (Historical) Logic
         if self.offline:
-            features.update({
-                "historical_avg_delay": self.offline.avg_delay_seconds,
-                "historical_stddev_delay": self.offline.stddev_delay_seconds,
-                "historical_p90_delay": self.offline.p90_delay_seconds,
-                "historical_sample_count": self.offline.sample_count,
-            })
+            features.update(
+                {
+                    "historical_avg_delay": self.offline.avg_delay_seconds,
+                    "historical_stddev_delay": self.offline.stddev_delay_seconds,
+                    "historical_p90_delay": self.offline.p90_delay_seconds,
+                    "historical_sample_count": self.offline.sample_count,
+                }
+            )
         else:
-            features.update({
-                "historical_avg_delay": 0.0,
-                "historical_stddev_delay": 0.0,
-                "historical_p90_delay": 0.0,
-                "historical_sample_count": 0,
-            })
+            features.update(
+                {
+                    "historical_avg_delay": 0.0,
+                    "historical_stddev_delay": 0.0,
+                    "historical_p90_delay": 0.0,
+                    "historical_sample_count": 0,
+                }
+            )
 
         return features
 
@@ -107,6 +115,7 @@ class CombinedFeatures:
 @dataclass
 class FeatureServiceMetrics:
     """Metrics for feature service health monitoring."""
+
     online_requests: int = 0
     online_hits: int = 0
     online_errors: int = 0
@@ -169,10 +178,10 @@ class FeatureService:
         """
         now = datetime.now(timezone.utc)
         request_timestamp = int(now.timestamp() * 1000)
-        
+
         # Consistent context inference
         h_ctx = hour_of_day if hour_of_day is not None else now.hour
-        
+
         # Align with SQL/DBT: Python's weekday() is 0-6 (Mon-Sun)
         # We pass this to the offline_store which uses fallback logic for 0-7 compatibility
         d_ctx = day_of_week if day_of_week is not None else now.weekday()
@@ -200,9 +209,7 @@ class FeatureService:
             self._metrics.offline_requests += 1
             try:
                 offline_data = self._offline_store.get_stop_features(
-                    stop_id=stop_id,
-                    hour_of_day=h_ctx,
-                    day_of_week=d_ctx
+                    stop_id=stop_id, hour_of_day=h_ctx, day_of_week=d_ctx
                 )
                 if offline_data:
                     self._metrics.offline_hits += 1
@@ -216,7 +223,7 @@ class FeatureService:
             online=online_data,
             offline=offline_data,
             online_available=(online_data is not None),
-            offline_available=(offline_data is not None)
+            offline_available=(offline_data is not None),
         )
 
     def get_active_vehicles(self) -> int:

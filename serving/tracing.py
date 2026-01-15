@@ -16,21 +16,22 @@ issues in a distributed system."
 
 import logging
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Generator
 from functools import wraps
-import uuid
+from typing import Any, Dict, Generator, Optional
 
 logger = logging.getLogger(__name__)
 
 try:
     from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.trace import Status, StatusCode
+
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
@@ -146,6 +147,7 @@ class Tracer:
 
     def traced(self, name: Optional[str] = None):
         """Decorator to trace a function."""
+
         def decorator(func):
             span_name = name or f"{func.__module__}.{func.__name__}"
 
@@ -155,6 +157,7 @@ class Tracer:
                     return func(*args, **kwargs)
 
             return wrapper
+
         return decorator
 
     def get_current_trace_id(self) -> Optional[str]:
@@ -162,9 +165,7 @@ class Tracer:
         if self._tracer and OTEL_AVAILABLE:
             current_span = trace.get_current_span()
             if current_span:
-                return format(
-                    current_span.get_span_context().trace_id, "032x"
-                )
+                return format(current_span.get_span_context().trace_id, "032x")
         return None
 
     def get_local_spans(self) -> list[SpanContext]:

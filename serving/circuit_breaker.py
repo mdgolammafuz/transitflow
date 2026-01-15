@@ -16,10 +16,10 @@ if the service recovered."
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from threading import Lock
-from typing import Callable, TypeVar, Optional, Any
+from typing import Callable, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,7 @@ class CircuitBreaker:
                 return fallback()
             else:
                 self._stats.total_short_circuits += 1
-                raise CircuitOpenError(
-                    f"Circuit {self._name} is open, failing fast"
-                )
+                raise CircuitOpenError(f"Circuit {self._name} is open, failing fast")
 
         try:
             result = func()
@@ -169,10 +167,7 @@ class CircuitBreaker:
 
     def _timeout_elapsed(self) -> bool:
         """Check if timeout has elapsed since last failure."""
-        return (
-            time.time() - self._stats.last_failure_time
-            >= self._config.timeout_seconds
-        )
+        return time.time() - self._stats.last_failure_time >= self._config.timeout_seconds
 
     def _on_success(self) -> None:
         """Handle successful call."""

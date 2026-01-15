@@ -5,18 +5,13 @@ Final Version: Fully implemented check-only logic, no emojis.
 """
 
 import argparse
-import json
 import logging
 import sys
-from pathlib import Path
 
 # PYTHONPATH=. must be set in the Makefile for this import to work
 from src.schema_registry.client import SchemaRegistryClient, SchemaRegistryError
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Schema definitions (Source of Truth for the Data Contract)
@@ -40,7 +35,7 @@ SCHEMAS = {
             {"name": "direction_id", "type": ["null", "int"], "default": None},
             {"name": "operator_id", "type": ["null", "int"], "default": None},
             {"name": "next_stop_id", "type": ["null", "int"], "default": None},
-        ]
+        ],
     },
     "enriched_event-value": {
         "type": "record",
@@ -58,7 +53,7 @@ SCHEMAS = {
             {"name": "delay_trend", "type": ["null", "double"], "default": None},
             {"name": "is_stopped", "type": ["null", "boolean"], "default": None},
             {"name": "processing_time", "type": ["null", "long"], "default": None},
-        ]
+        ],
     },
     "stop_event-value": {
         "type": "record",
@@ -71,9 +66,10 @@ SCHEMAS = {
             {"name": "arrival_time", "type": "long"},
             {"name": "delay_at_arrival", "type": "int"},
             {"name": "dwell_time_ms", "type": ["null", "long"], "default": None},
-        ]
-    }
+        ],
+    },
 }
+
 
 def check_schemas(client: SchemaRegistryClient) -> bool:
     """Check if the Registry matches our local source of truth."""
@@ -105,6 +101,7 @@ def check_schemas(client: SchemaRegistryClient) -> bool:
 
     return all_consistent
 
+
 def register_all_schemas(client: SchemaRegistryClient, dry_run: bool = False) -> bool:
     success = True
     for subject, schema in SCHEMAS.items():
@@ -112,7 +109,7 @@ def register_all_schemas(client: SchemaRegistryClient, dry_run: bool = False) ->
             if dry_run:
                 logger.info(f"[DRY RUN] Target: {subject}")
                 continue
-            
+
             try:
                 # Attempt to register the schema
                 schema_id = client.register_schema(subject, schema)
@@ -128,15 +125,16 @@ def register_all_schemas(client: SchemaRegistryClient, dry_run: bool = False) ->
                         continue
                 else:
                     raise e
-            
+
             # Enforce the data contract compatibility level
-            if hasattr(client, 'set_compatibility'):
+            if hasattr(client, "set_compatibility"):
                 client.set_compatibility(subject, "BACKWARD")
-            
+
         except Exception as e:
             logger.error(f"[FAIL] Registration failed for {subject}: {e}")
             success = False
     return success
+
 
 def main():
     parser = argparse.ArgumentParser(description="TransitFlow Schema Registry Utility")
@@ -144,13 +142,13 @@ def main():
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    
+
     client = SchemaRegistryClient(args.url)
-    
+
     if not client.is_healthy():
         logger.error(f"[FAIL] Connection to Schema Registry refused at {args.url}")
         sys.exit(1)
-    
+
     if args.check_only:
         success = check_schemas(client)
         if success:
@@ -159,8 +157,9 @@ def main():
         success = register_all_schemas(client, args.dry_run)
         if success and not args.dry_run:
             logger.info("Registry synchronization successful.")
-    
+
     sys.exit(0 if success else 1)
+
 
 if __name__ == "__main__":
     main()

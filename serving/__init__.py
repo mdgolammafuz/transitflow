@@ -1,7 +1,7 @@
 """
 ML Serving module.
 
-Pattern: 
+Pattern:
 Distributed Tracing
 Circuit Breaker
 
@@ -15,8 +15,8 @@ Provides:
 from serving.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
-    CircuitState,
     CircuitOpenError,
+    CircuitState,
     circuit_registry,
 )
 from serving.tracing import Tracer, get_tracer, init_tracer

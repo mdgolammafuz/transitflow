@@ -10,12 +10,13 @@ Training pipeline for delay prediction using:
 """
 
 from ml_pipeline.config import MLConfig
-from ml_pipeline.training import DelayPredictor, train_model
 from ml_pipeline.registry import ModelRegistry
+from ml_pipeline.training import DelayPredictor, TrainingResult, train_model
 
 __all__ = [
     "MLConfig",
     "DelayPredictor",
     "train_model",
+    "TrainingResult",
     "ModelRegistry",
 ]

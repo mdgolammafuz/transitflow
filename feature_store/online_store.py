@@ -6,9 +6,9 @@ Real-time features written by Flink, read by serving API.
 """
 
 import logging
-from typing import Dict, Optional, Any, List
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import redis
 from redis.exceptions import RedisError
@@ -24,6 +24,7 @@ class OnlineFeatures:
     Real-time features for a vehicle.
     Frozen to ensure immutability during the request lifecycle.
     """
+
     vehicle_id: int
     line_id: Optional[str]
     current_delay: int
@@ -110,7 +111,7 @@ class OnlineStore:
         updated_at = int(data.get("updated_at", 0))
         lat = float(data.get("latitude", 0.0))
         lon = float(data.get("longitude", 0.0))
-        
+
         # Hardening: Trace placeholder coordinates coming from the real-time stream
         if lat == 0.0 or lon == 0.0:
             logger.debug(f"Placeholder coordinates detected in Redis for vehicle {vehicle_id}")
