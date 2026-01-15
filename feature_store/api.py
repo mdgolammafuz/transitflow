@@ -6,6 +6,7 @@ Robustness: Handles partial store availability and supplemental data placeholder
 """
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
@@ -83,11 +84,6 @@ class OnlineFeaturesResponse(BaseModel):
     updated_at: int
     feature_age_ms: int
 
-    @field_validator("latitude", "longitude")
-    @classmethod
-    def validate_coordinates(cls, v: float) -> float:
-        return v
-
 
 class OfflineFeaturesResponse(BaseModel):
     """Offline features - Aligned exactly with fct_stop_arrivals schema."""
@@ -96,6 +92,9 @@ class OfflineFeaturesResponse(BaseModel):
     line_id: str
     hour_of_day: int = Field(ge=0, le=23)
     day_of_week: int = Field(ge=0, le=7)
+    # NEW: Added coordinates for ML model geographical context
+    latitude: float
+    longitude: float
     historical_avg_delay: float
     historical_stddev_delay: float
     avg_dwell_time_seconds: float
@@ -174,7 +173,6 @@ async def get_features(
 
     if combined.offline:
         try:
-            # Combined.offline is a StopFeatures object
             res_data["offline_features"] = combined.offline.to_dict()
         except Exception as e:
             logger.warning(f"Offline validation failed: {e}")
@@ -206,5 +204,7 @@ async def get_metrics():
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Security: Allow environment override but default to localhost for safety
+    host = os.environ.get("API_HOST", "127.0.0.1")
+    port = int(os.environ.get("API_PORT", 8000))
+    uvicorn.run(app, host=host, port=port)
