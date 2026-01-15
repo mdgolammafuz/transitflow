@@ -1,7 +1,7 @@
 """
 ML Serving API.
 
-Patterns: 
+Patterns:
 Distributed Tracing
 Circuit Breaker
 ML Reproducibility
@@ -23,25 +23,19 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from feature_store.config import FeatureStoreConfig
-from feature_store.feature_service import FeatureService, CombinedFeatures
+from feature_store.feature_service import CombinedFeatures, FeatureService
 from ml_pipeline.config import MLConfig
 from ml_pipeline.training import DelayPredictor
-from serving.circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerConfig,
-    CircuitState,
-    circuit_registry,
-)
-from serving.tracing import init_tracer, get_tracer
+from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, circuit_registry
+from serving.tracing import get_tracer, init_tracer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -203,6 +197,7 @@ def get_features_with_circuit_breaker(
     )
 
     with tracer.span("get_online_features", {"vehicle_id": vehicle_id}):
+
         def fetch_online():
             return feature_service._online_store.get_features(vehicle_id)
 
@@ -224,9 +219,7 @@ def get_features_with_circuit_breaker(
             day = day_of_week if day_of_week is not None else now.weekday()
 
             def fetch_offline():
-                return feature_service._offline_store.get_stop_features(
-                    stop_id, line_id, hour, day
-                )
+                return feature_service._offline_store.get_stop_features(stop_id, line_id, hour, day)
 
             def fallback_offline():
                 return None

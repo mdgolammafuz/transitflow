@@ -8,7 +8,7 @@ Robustness: Handles partial store availability and supplemental data placeholder
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 config = FeatureStoreConfig.from_env()
 feature_service: Optional[FeatureService] = None
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -40,15 +41,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Feature service started in DEGRADED mode. Connection error: {e}")
         logger.warning("Online features may be unavailable, but Offline lookups will proceed.")
-    
+
     yield
-    
+
     if feature_service:
         try:
             feature_service.close()
             logger.info("Feature service connections closed")
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
+
 
 app = FastAPI(
     title="TransitFlow Feature Store",
@@ -57,12 +59,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
 class HealthResponse(BaseModel):
     status: str
     online_store: str
     offline_store: str
     active_vehicles: int
     metrics: Dict[str, Any]
+
 
 class OnlineFeaturesResponse(BaseModel):
     vehicle_id: int
@@ -79,13 +83,15 @@ class OnlineFeaturesResponse(BaseModel):
     updated_at: int
     feature_age_ms: int
 
-    @field_validator('latitude', 'longitude')
+    @field_validator("latitude", "longitude")
     @classmethod
     def validate_coordinates(cls, v: float) -> float:
         return v
 
+
 class OfflineFeaturesResponse(BaseModel):
     """Offline features - Aligned exactly with fct_stop_arrivals schema."""
+
     stop_id: str
     line_id: str
     hour_of_day: int = Field(ge=0, le=23)
@@ -95,12 +101,13 @@ class OfflineFeaturesResponse(BaseModel):
     avg_dwell_time_seconds: float
     historical_arrival_count: int
 
-    @field_validator('historical_arrival_count')
+    @field_validator("historical_arrival_count")
     @classmethod
     def validate_sample_size(cls, v: int) -> int:
         if v < 1:
-            raise ValueError('No historical samples available for this context')
+            raise ValueError("No historical samples available for this context")
         return v
+
 
 class CombinedFeaturesResponse(BaseModel):
     vehicle_id: int
@@ -110,6 +117,7 @@ class CombinedFeaturesResponse(BaseModel):
     online_features: Optional[OnlineFeaturesResponse] = None
     offline_features: Optional[OfflineFeaturesResponse] = None
     latency_ms: float
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -124,6 +132,7 @@ async def health_check():
         active_vehicles=active,
         metrics=health["metrics"],
     )
+
 
 @app.get("/features/{vehicle_id}", response_model=CombinedFeaturesResponse)
 async def get_features(
@@ -153,7 +162,7 @@ async def get_features(
         "offline_available": combined.offline_available,
         "latency_ms": round(latency_ms, 2),
         "online_features": None,
-        "offline_features": None
+        "offline_features": None,
     }
 
     if combined.online:
@@ -172,6 +181,7 @@ async def get_features(
             res_data["offline_available"] = False
 
     return JSONResponse(content=res_data)
+
 
 @app.get("/metrics")
 async def get_metrics():
@@ -193,6 +203,8 @@ async def get_metrics():
         },
     }
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
