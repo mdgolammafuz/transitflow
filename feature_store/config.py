@@ -1,12 +1,12 @@
 """
 Feature Store configuration.
 
-All configuration via environment variables or .env files.
+Pattern: Zero-Secret Architecture
+Pattern: Fail-fast Validation
 Uses Pydantic Settings for validation and type safety.
 """
 
-import os
-
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,37 +14,42 @@ class FeatureStoreConfig(BaseSettings):
     """
     Configuration for Feature Store.
     Automatically loads from environment variables or .env file.
+    No hardcoded defaults for sensitive credentials.
     """
 
     # Redis Configuration (Online Store)
-    redis_host: str = os.getenv("REDIS_HOST", "localhost")
-    redis_port: int = int(os.getenv("REDIS_PORT", 6379))
+    redis_host: str = "localhost"
+    redis_port: int = 6379
     redis_key_prefix: str = "features:vehicle:"
     redis_ttl_seconds: int = 300
-    redis_password: str = os.getenv("REDIS_PASSWORD", "")
+    # No default password
+    redis_password: str = Field(default="")
 
     # PostgreSQL Configuration (Offline Store)
-    postgres_user: str = os.getenv("POSTGRES_USER", "transit")
-    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "transit_secure_local")
-    postgres_db: str = os.getenv("POSTGRES_DB", "transit")
-    postgres_host: str = os.getenv("POSTGRES_HOST", "localhost")
-    postgres_port: int = int(os.getenv("POSTGRES_PORT", 5432))
+    # Required fields (no defaults) to ensure security and fail-fast behavior
+    postgres_user: str
+    postgres_password: str
+    postgres_db: str = "transit"
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
 
     # DBT/Schema Configuration
-    # Pattern: Explicitly defining the schema allows the Offline Store
-    # to find the dbt Marts regardless of the default public search path.
-    postgres_schema: str = os.getenv("POSTGRES_SCHEMA", "marts")
+    postgres_schema: str = "marts"
 
     # API and Service Settings
     cache_ttl_seconds: int = 60
     request_timeout_seconds: float = 1.0
 
     # Load from .env file if it exists
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8", 
+        extra="ignore"
+    )
 
     @classmethod
     def from_env(cls) -> "FeatureStoreConfig":
-        """Helper to maintain API consistency with previous implementation."""
+        """Factory method to load and validate config from environment."""
         return cls()
 
     def redis_url(self) -> str:
