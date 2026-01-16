@@ -112,9 +112,9 @@ class OnlineStore:
         lat = float(data.get("latitude", 0.0))
         lon = float(data.get("longitude", 0.0))
 
-        # Hardening: Trace placeholder coordinates coming from the real-time stream
-        if lat == 0.0 or lon == 0.0:
-            logger.debug(f"Placeholder coordinates detected in Redis for vehicle {vehicle_id}")
+        # Hardening: Handle potentially empty strings for IDs
+        next_stop_raw = data.get("next_stop_id")
+        next_stop_id = int(next_stop_raw) if (next_stop_raw and next_stop_raw.strip()) else None
 
         return OnlineFeatures(
             vehicle_id=int(data.get("vehicle_id", vehicle_id)),
@@ -127,7 +127,7 @@ class OnlineStore:
             stopped_duration_ms=int(data.get("stopped_duration_ms", 0)),
             latitude=lat,
             longitude=lon,
-            next_stop_id=int(data["next_stop_id"]) if data.get("next_stop_id") else None,
+            next_stop_id=next_stop_id,
             updated_at=updated_at,
             feature_age_ms=now_ms - updated_at,
         )

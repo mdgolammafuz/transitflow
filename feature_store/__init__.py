@@ -1,22 +1,8 @@
 """
 Feature Store module.
 
-Pattern:
-Semantic Interface
-ML Reproducibility
-
-Provides unified access to online (Redis) and offline (PostgreSQL) features
-with training-serving consistency guarantees.
+Pattern: Semantic Interface
+Robustness: Minimized initialization to prevent circular imports.
 """
 
-from feature_store.config import FeatureStoreConfig
-from feature_store.feature_service import FeatureService
-from feature_store.offline_store import OfflineStore
-from feature_store.online_store import OnlineStore
-
-__all__ = [
-    "FeatureStoreConfig",
-    "OnlineStore",
-    "OfflineStore",
-    "FeatureService",
-]
+__version__ = "1.0.0"

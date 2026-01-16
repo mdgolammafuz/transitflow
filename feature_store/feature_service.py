@@ -2,7 +2,8 @@
 Feature Service - Unified Feature Access.
 
 Pattern: Semantic Interface & ML Reproducibility
-Combines online (Redis) and offline (PostgreSQL) features into a unified interface.
+Methodical: Updated to direct ms mapping for dwell time and historical naming.
+Robust: Handles missing online data with fallbacks to Ingredient B (spatial).
 """
 
 import logging
@@ -47,19 +48,17 @@ class CombinedFeatures:
     def to_feature_vector(self) -> Dict[str, Any]:
         """
         Convert to flat feature vector for ML model.
-        Aligned with Phase 6 'historical_avg_delay' contract and coordinate fallback.
+        Aligned with Phase 5/6 Methodical naming and validated dbt types.
         """
-        features: Dict[str, Any] = {
-            "vehicle_id": self.vehicle_id,
-        }
+        features: Dict[str, Any] = {"vehicle_id": self.vehicle_id}
 
         # 1. Real-time (Online) features
         if self.online:
             features.update({
                 "current_delay": self.online.current_delay,
-                "delay_trend": self.online.delay_trend,
-                "current_speed": self.online.current_speed,
-                "speed_trend": self.online.speed_trend,
+                "delay_trend": getattr(self.online, 'delay_trend', 0.0),
+                "current_speed": getattr(self.online, 'current_speed', 0.0),
+                "speed_trend": getattr(self.online, 'speed_trend', 0.0),
                 "is_stopped": 1 if self.online.is_stopped else 0,
                 "stopped_duration_ms": self.online.stopped_duration_ms,
                 "latitude": self.online.latitude,
@@ -67,7 +66,7 @@ class CombinedFeatures:
                 "feature_age_ms": self.online.feature_age_ms,
             })
         else:
-            # Defaults for missing online data
+            # Robust defaults for missing real-time data
             features.update({
                 "current_delay": 0,
                 "delay_trend": 0.0,
@@ -80,20 +79,21 @@ class CombinedFeatures:
                 "feature_age_ms": -1,
             })
 
-        # 2. Historical (Offline) features - Using updated 'historical' naming
+        # 2. Historical (Offline) features - Phase 5 'historical_' alignment
         if self.offline:
-            # Fallback Logic: If GPS (online) is missing, use historical stop coordinates
-            if features["latitude"] is None:
+            # Spatial Fallback: Use historical stop coordinates if real-time GPS is lost
+            if features.get("latitude") is None:
                 features["latitude"] = self.offline.latitude
                 features["longitude"] = self.offline.longitude
 
             features.update({
                 "historical_avg_delay": self.offline.historical_avg_delay,
                 "historical_stddev_delay": self.offline.historical_stddev_delay,
-                "avg_dwell_time_ms": self.offline.avg_dwell_time_seconds * 1000.0,
+                "avg_dwell_time_ms": self.offline.avg_dwell_time_ms, # Direct mapping from Gold Mart
                 "historical_arrival_count": self.offline.historical_arrival_count,
             })
         else:
+            # Defaults aligned with ML model expected scale
             features.update({
                 "historical_avg_delay": 0.0,
                 "historical_stddev_delay": 0.0,
@@ -142,6 +142,7 @@ class FeatureService:
         self._offline_store.close()
 
     def health_check(self) -> Dict[str, Any]:
+        """Verify health of both stores."""
         online_healthy = self._online_store.is_healthy()
         offline_healthy = self._offline_store.is_healthy()
 
@@ -182,6 +183,7 @@ class FeatureService:
             online_data = self._online_store.get_features(vehicle_id)
             if online_data:
                 self._metrics.online_hits += 1
+                # Context enrichment from real-time data
                 if stop_id is None and online_data.next_stop_id:
                     stop_id = str(online_data.next_stop_id)
                 if line_id is None:

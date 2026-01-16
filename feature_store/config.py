@@ -2,7 +2,7 @@
 Feature Store configuration.
 
 Pattern: Zero-Secret Architecture
-Pattern: Fail-fast Validation
+Pattern: Leaf Module (No internal project imports to prevent circularity)
 Uses Pydantic Settings for validation and type safety.
 """
 
@@ -26,7 +26,6 @@ class FeatureStoreConfig(BaseSettings):
     redis_password: str = Field(default="")
 
     # PostgreSQL Configuration (Offline Store)
-    # Required fields (no defaults) to ensure security and fail-fast behavior
     postgres_user: str
     postgres_password: str
     postgres_db: str = "transit"

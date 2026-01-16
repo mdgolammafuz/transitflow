@@ -19,48 +19,40 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
-# Model configurations: Defining the layers of the Helsinki Trace
+# Model configurations
 models:
   transitflow:
-    # Staging: Firewall layer - lightweight views
     staging:
       +materialized: view
       +schema: staging
-      
-    # Intermediate: Sessionization and metric logic
     intermediate:
       +materialized: view
       +schema: intermediate
-      
-    # Dimensions: SCD Type 2 tracking (Line/Stop metadata)
     dimensions:
       +materialized: table
       +schema: dimensions
-      
-    # Marts: The Feature Store - high-performance tables for API
     marts:
       +materialized: table
       +schema: marts
 
 # Seed configurations: GTFS Static Data
+# Explicit routing: each file gets its own explicit alias
 seeds:
   transitflow:
     +schema: reference
+    seed_stops:
+      +alias: stops
+    seed_lines:
+      +alias: lines
 
 # Test configurations
 tests:
   +severity: error
   +store_failures: true
 
-# Global Variables used across the Spark and dbt pipeline
 vars:
-  # Delay thresholds (seconds) for the classify_delay macro
   on_time_threshold: 60
   delayed_threshold: 300
-  
-  # Data quality thresholds for the stg_enriched "firewall"
-  max_delay_seconds: 7200      # 2 hours
-  min_delay_seconds: -3600     # 1 hour early
-  
-  # SCD Type 2 sentinel date - Aligned with Postgres Timestamp format
+  max_delay_seconds: 7200
+  min_delay_seconds: -3600
   scd_end_date: '2099-12-31 23:59:59'

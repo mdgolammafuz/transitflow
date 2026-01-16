@@ -3,7 +3,7 @@
         spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
         dbt-run dbt-test dbt-docs schema-register schema-check schema-list \
         feature-api feature-sync feature-verify feature-test \
-        serving-api train-model serving-verify serving-test
+        serving-api train-model serving-verify serving-test lakehouse-ls metadata-init
 
 # --- Configuration ---
 # Loads credentials and service names from infra/local/.env
@@ -42,13 +42,19 @@ DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
 DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
 
 # Spark execution wrapper (Container-based)
-SPARK_SUBMIT := docker exec -it --env-file infra/local/.env spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
+# Robust: Explicitly overrides HOST environment variables for the internal Docker network context.
+# This prevents 'Connection Refused' by ensuring Spark looks for 'minio' and 'postgres' containers, not itself.
+SPARK_SUBMIT := docker exec -it --env-file infra/local/.env \
+  -e POSTGRES_HOST=postgres \
+  -e MINIO_ENDPOINT=http://minio:9000 \
+  spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
   --total-executor-cores 1 \
-  --executor-memory 512M \
+  --executor-memory 2G \
+  --driver-memory 1G \
   --packages $(SPARK_PKGS)
-  
+
 help:
 	@echo "TransitFlow - Unified Pipeline Control"
 	@echo ""
@@ -75,7 +81,8 @@ help:
 	@echo "Batch Processing (Spark):"
 	@echo "  make spark-bronze       Stream Kafka data to Delta Lake Bronze"
 	@echo "  make spark-silver       Run Silver-layer cleaning transformations"
-	@echo "  make spark-gold         Execute Gold-layer business aggregations"
+	@echo "  make metadata-init      Initialize Gold Metadata (Ingredient B) from Postgres"
+	@echo "  make spark-gold         Execute Gold-layer business aggregations (depends on metadata)"
 	@echo "  make spark-reconcile    Run data reconciliation between Bronze and Silver"
 	@echo ""
 	@echo "Warehouse & Transformation (dbt):"
@@ -101,6 +108,9 @@ dev-up:
 	@echo "Initializing services..."
 	@sleep 15
 	@$(MAKE) topics
+	@echo "Ensuring Lakehouse bucket exists..."
+	@docker exec -it minio mc alias set local http://localhost:9000 minioadmin minioadmin > /dev/null
+	@docker exec -it minio mc mb local/$(LAKEHOUSE_BUCKET) || true
 
 dev-down:
 	cd infra/local && docker compose down
@@ -111,21 +121,15 @@ topics:
 	docker exec -it redpanda rpk topic create fleet.telemetry.dlq --partitions 1 2>/dev/null || true
 
 # --- Quality Assurance ---
-.PHONY: lint
 lint:
 	@echo "Running Import Sort (isort)..."
 	isort feature_store/ serving/ ml_pipeline/ scripts/ tests/ src/
-	
 	@echo "Running Formatter (black)..."
 	black feature_store/ serving/ ml_pipeline/ scripts/ tests/ src/
-	
 	@echo "Running Linter (ruff)..."
 	ruff check feature_store/ serving/ ml_pipeline/ scripts/ tests/ src/ --fix
-	
 	@echo "Running Security Scan (bandit)..."
-	# -r: recursive, -ll: only high severity, -c: use config from pyproject.toml
 	bandit -r feature_store/ serving/ ml_pipeline/ scripts/ src/ -c pyproject.toml
-	
 	@echo "Running Static Type Checker (mypy)..."
 	mypy feature_store/ serving/ ml_pipeline/ scripts/ src/
 
@@ -155,8 +159,35 @@ spark-bronze:
 spark-silver:
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/silver_transform.py
 
-spark-gold:
-	$(SPARK_SUBMIT) /opt/spark/jobs/spark/gold_aggregation.py
+# Methodical: Ensures metadata is initialized before attempting gold aggregation
+# Robust: Explicitly sets MinIO endpoint to the container address for Spark context
+metadata-init:
+	@echo "Initializing Gold Metadata Layer from Postgres..."
+	$(SPARK_SUBMIT) \
+		--master "local[*]" \
+		--conf spark.driver.host=localhost \
+		--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+		--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
+		--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
+		--conf spark.hadoop.fs.s3a.path.style.access=true \
+		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+		/opt/spark/jobs/spark/initialize_metadata.py
+
+# Optimized: Uses master local[*] with explicit S3A configs to bypass cluster auth issues
+# Methodical: Depends on metadata-init to prevent hangs on missing paths
+spark-gold: metadata-init
+	@echo "Running Gold Aggregations..."
+	$(SPARK_SUBMIT) \
+		--master "local[*]" \
+		--conf spark.driver.host=localhost \
+		--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+		--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
+		--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
+		--conf spark.hadoop.fs.s3a.path.style.access=true \
+		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+		/opt/spark/jobs/spark/gold_aggregation.py
 
 spark-reconcile:
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/reconciliation.py --save
@@ -197,8 +228,18 @@ dbt-docs:
 feature-api:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 feature_store/api.py
 
+# Optimized: Explicit S3A configs to ensure sync always succeeds
 feature-sync:
-	$(SPARK_SUBMIT) /opt/spark/jobs/feature_store/feature_sync.py
+	$(SPARK_SUBMIT) \
+		--master "local[*]" \
+		--conf spark.driver.host=localhost \
+		--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+		--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
+		--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
+		--conf spark.hadoop.fs.s3a.path.style.access=true \
+		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+		/opt/spark/jobs/feature_store/feature_sync.py
 
 feature-verify:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_feature_store.py --check-all
@@ -208,7 +249,7 @@ feature-test:
 
 train-model:
 	@echo "Starting ML Training Pipeline..."
-	$(SPARK_SUBMIT) /opt/spark/jobs/scripts/train_model.py
+	$(SPARK_SUBMIT) /opt/spark/jobs/ml_pipeline/training.py
 
 serving-api:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 serving/api.py
@@ -227,7 +268,7 @@ verify-pipeline:
 
 # --- Storage & Lakehouse Utilities ---
 lakehouse-ls:
-	@docker exec -it minio sh -c "mc alias set myminio http://localhost:9000 minioadmin minioadmin > /dev/null && mc ls -r myminio/transitflow-lakehouse/"
+	@docker exec -it minio mc alias set myminio http://localhost:9000 minioadmin minioadmin > /dev/null && mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
 
 # --- Maintenance ---
 clean:

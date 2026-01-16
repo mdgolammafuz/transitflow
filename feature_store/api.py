@@ -86,27 +86,36 @@ class OnlineFeaturesResponse(BaseModel):
 
 
 class OfflineFeaturesResponse(BaseModel):
-    """Offline features - Aligned exactly with fct_stop_arrivals schema."""
+    """Offline features - Strictly aligned with validated Phase 5 marts.fct_stop_arrivals."""
 
     stop_id: str
     line_id: str
     hour_of_day: int = Field(ge=0, le=23)
     day_of_week: int = Field(ge=0, le=7)
-    # NEW: Added coordinates for ML model geographical context
+    
+    # Ingredient B: Spatial coordinates (Required for Phase 6 ML)
     latitude: float
     longitude: float
+    
+    # Methodical: Aligned with 'historical_' prefix from Spark/dbt
     historical_avg_delay: float
     historical_stddev_delay: float
-    avg_dwell_time_seconds: float
     historical_arrival_count: int
+    historical_on_time_pct: float = Field(alias="on_time_percentage")
+    
+    # Units: ms (as produced by Spark Gold)
+    avg_dwell_time_ms: float
 
     @field_validator("historical_arrival_count")
     @classmethod
     def validate_sample_size(cls, v: int) -> int:
+        # Prevents model training on statistically insignificant data
         if v < 1:
             raise ValueError("No historical samples available for this context")
         return v
-
+    
+    class Config:
+        populate_by_name = True
 
 class CombinedFeaturesResponse(BaseModel):
     vehicle_id: int

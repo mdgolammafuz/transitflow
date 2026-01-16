@@ -76,9 +76,13 @@ models:
         data_type: integer
       - name: sample_count
         data_type: bigint
-      - name: avg_delay
+      - name: historical_avg_delay
         data_type: double precision
       - name: avg_dwell_time_ms
+        data_type: double precision
+      - name: latitude
+        data_type: double precision
+      - name: longitude
         data_type: double precision
       - name: ingestion_time
         data_type: timestamp with time zone

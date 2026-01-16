@@ -1,9 +1,13 @@
 /*
     Dimension: Lines (SCD Type 2)
+    Context: Static reference data for Transit Lines.
     Harden: Ensures type consistency for surrogate keys and SCD dates.
 */
 
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    schema='dimensions'
+) }}
 
 with snapshot_source as (
     -- Reads from the snapshot which tracks changes in the seed_lines source
@@ -17,16 +21,16 @@ final as (
         
         -- Business logic columns
         cast(line_id as text) as line_id,
-        line_name,
-        line_type,
-        operator_name,
+        cast(line_name as text) as line_name,
+        cast(line_type as text) as line_type,
+        cast(operator_name as text) as operator_name,
         
         -- SCD Type 2 Metadata
         dbt_valid_from as valid_from,
-        -- Uses the global variable for end-of-time (usually 2099-01-01)
+        -- Alignment: Using 2099-12-31 to match dim_stops fallback
         coalesce(
             dbt_valid_to, 
-            cast('{{ var("scd_end_date") }}' as timestamp)
+            cast('2099-12-31' as timestamp)
         ) as valid_to,
         
         -- Flag for the current active version of a line

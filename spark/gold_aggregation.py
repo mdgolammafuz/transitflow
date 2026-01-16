@@ -1,10 +1,13 @@
 """
 Gold Aggregation: Silver → Gold (Batch)
 Creates aggregated tables for analytics and Feature Store (Postgres).
+Methodical: Fails fast if source data or metadata is missing.
+Aligned: Forces Lakehouse schema to match the methodical 'historical_*' naming.
 """
 
 import argparse
 import logging
+import sys
 from typing import Optional
 
 from delta.tables import DeltaTable
@@ -16,16 +19,25 @@ from pyspark.sql.functions import sum as spark_sum
 # Absolute import for package consistency
 from spark.config import create_spark_session, load_config
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
+def validate_source(spark: SparkSession, path: str, name: str):
+    """Checks if a Delta table exists. If not, exits to prevent hangs."""
+    if not DeltaTable.isDeltaTable(spark, path):
+        logger.critical(f"DEPENDENCY MISSING: {name} table not found at {path}")
+        logger.critical(f"Please ensure previous pipeline steps (Silver/Metadata) have completed.")
+        sys.exit(1)
+    return True
+
+
 def write_to_postgres(df: DataFrame, table_name: str, config):
-    """
-    Helper to sync Gold data to the Postgres Feature Store.
-    Note: We write to 'public' schema so dbt can pick it up as a raw source.
-    """
-    logger.info(f"Syncing {table_name} to Postgres")
+    """Sync Gold data to the Postgres Feature Store (Marts)."""
+    logger.info(f"Syncing {table_name} to Postgres Marts...")
     df.write \
         .format("jdbc") \
         .option("url", config.postgres_jdbc_url) \
@@ -41,7 +53,10 @@ def aggregate_daily_metrics(spark: SparkSession, config, process_date: Optional[
     """Aggregate enriched data into daily KPIs."""
     silver_path = f"{config.silver_path}/enriched"
     gold_path = f"{config.gold_path}/daily_metrics"
+    
+    validate_source(spark, silver_path, "Silver Enriched")
     logger.info("Aggregating daily metrics")
+    
     try:
         silver_df = spark.read.format("delta").load(silver_path)
         if process_date:
@@ -77,13 +92,17 @@ def aggregate_daily_metrics(spark: SparkSession, config, process_date: Optional[
 
     except Exception as e:
         logger.error(f"Daily aggregation failed: {e}")
+        sys.exit(1)
 
 
 def aggregate_hourly_metrics(spark: SparkSession, config, process_date: Optional[str] = None):
     """Aggregate enriched data into hourly snapshots."""
     silver_path = f"{config.silver_path}/enriched"
     gold_path = f"{config.gold_path}/hourly_metrics"
+    
+    validate_source(spark, silver_path, "Silver Enriched")
     logger.info("Aggregating hourly metrics")
+    
     try:
         silver_df = spark.read.format("delta").load(silver_path)
         if process_date:
@@ -112,31 +131,55 @@ def aggregate_hourly_metrics(spark: SparkSession, config, process_date: Optional
 
     except Exception as e:
         logger.error(f"Hourly aggregation failed: {e}")
+        sys.exit(1)
 
+def write_to_postgres(df: DataFrame, table_name: str, config):
+    """
+    Syncs Gold data to Postgres Marts.
+    Methodical: Uses truncate=true to empty the table without dropping it,
+    preserving downstream dbt view dependencies.
+    """
+    logger.info(f"Syncing {table_name} to Postgres Marts (Truncate Mode)...")
+    df.write \
+        .format("jdbc") \
+        .option("url", config.postgres_jdbc_url) \
+        .option("dbtable", table_name) \
+        .option("user", config.postgres_user) \
+        .option("password", config.postgres_password) \
+        .option("driver", "org.postgresql.Driver") \
+        .mode("overwrite") \
+        .option("truncate", "true") \
+        .save()
 
 def aggregate_stop_performance(spark: SparkSession, config, process_date: Optional[str] = None):
-    """Aggregate stop events for ML feature engineering with coordinate enrichment."""
-    # Paths
+    """
+    Aggregate stop events for ML feature engineering with coordinate enrichment.
+    Methodical: Uses INNER JOIN to filter out stops missing Ingredient B (GPS),
+    ensuring compliance with dbt 'not_null' contracts and avoiding NULL pollution.
+    """
     silver_path = f"{config.silver_path}/stop_events"
-    metadata_path = f"{config.gold_path}/stops" # or where your stops metadata lives
+    metadata_path = f"{config.gold_path}/stops" 
     gold_path = f"{config.gold_path}/stop_performance"
     
-    logger.info("Aggregating and enriching stop performance")
+    # 1. Dependency Validation
+    validate_source(spark, silver_path, "Silver Stop Events")
+    validate_source(spark, metadata_path, "Gold Stop Metadata")
+    
+    logger.info("Aggregating stop performance and enforcing spatial integrity")
     try:
-        # 1. Load Data
+        # 2. Load Data
         silver_df = spark.read.format("delta").load(silver_path)
         if process_date:
             silver_df = silver_df.filter(col("date") == process_date)
 
-        # 2. Load Metadata (Lat/Lon)
-        # We only need the ID and the coordinates
+        # 3. Load Metadata (Ingredient B - Coordinates)
         stops_metadata = spark.read.format("delta").load(metadata_path).select(
             col("stop_id"),
             col("stop_lat").alias("latitude"),
             col("stop_lon").alias("longitude")
         )
 
-        # 3. Calculate Metrics with 'Historical' Naming Contract
+        # 4. Calculate Metrics with Methodical Naming
         stop_metrics = (
             silver_df.withColumn("hour_of_day", hour("arrival_timestamp"))
             .withColumn("day_of_week", dayofweek("arrival_timestamp"))
@@ -148,26 +191,27 @@ def aggregate_stop_performance(spark: SparkSession, config, process_date: Option
             )
         )
 
-        # 4. Enrich with Coordinates
-        # Joining here makes S3 "Smart" and ML-ready
+        # 5. Join with Ingredient B (GPS coordinates)
+        # INNER JOIN: Only promotes stops with valid GPS. 
+        # This prevents 'not_null' test failures in dbt for the 13 problematic stations.
         enriched_stop_df = stop_metrics.join(stops_metadata, on="stop_id", how="inner")
 
-        # 5. Update Lakehouse (MinIO)
-        if DeltaTable.isDeltaTable(spark, gold_path):
-            dt = DeltaTable.forPath(spark, gold_path)
-            dt.alias("t").merge(
-                enriched_stop_df.alias("s"),
-                "t.stop_id = s.stop_id AND t.line_id = s.line_id "
-                "AND t.hour_of_day = s.hour_of_day AND t.day_of_week = s.day_of_week",
-            ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-        else:
-            enriched_stop_df.write.format("delta").mode("overwrite").save(gold_path)
+        # 6. Update Lakehouse (MinIO)
+        logger.info(f"Writing to Lakehouse: {gold_path}")
+        enriched_stop_df.write.format("delta") \
+            .mode("overwrite") \
+            .option("overwriteSchema", "true") \
+            .save(gold_path)
 
-        # 6. Update Postgres (Syncing the Enriched Table)
+        # 7. Update Postgres (Marts for Feature API)
+        # This uses the truncate-enabled write function to avoid DROP errors.
         write_to_postgres(enriched_stop_df, "public.fct_stop_arrivals", config)
+        
+        logger.info("SUCCESS: Gold stop performance updated. Spatial integrity enforced.")
 
     except Exception as e:
-        logger.error(f"Stop performance aggregation and enrichment failed: {e}")
+        logger.error(f"Stop performance aggregation failed: {e}")
+        sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser()

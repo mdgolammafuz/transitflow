@@ -29,10 +29,30 @@ models:
       - name: line_id
         data_tests:
           - not_null
+      - name: hour_of_day
+        data_tests:
+          - not_null
+      - name: day_of_week
+        data_tests:
+          - not_null
       - name: sample_count
         description: "Historical count of arrivals in this bucket"
         data_tests:
           - not_null
       - name: historical_avg_delay
+        data_tests:
+          - not_null
+      - name: historical_stddev_delay
+        description: "Placeholder for standard deviation of delay"
+      - name: avg_dwell_time_ms
+        description: "Average time spent at the stop in milliseconds"
+      - name: on_time_percentage
+        description: "Historical on-time performance percentage"
+      - name: latitude
+        description: "Ingredient B: Latitude from Spark enrichment"
+        data_tests:
+          - not_null
+      - name: longitude
+        description: "Ingredient B: Longitude from Spark enrichment"
         data_tests:
           - not_null

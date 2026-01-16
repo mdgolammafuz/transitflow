@@ -1,6 +1,6 @@
 """
 Offline Feature Store - PostgreSQL.
-Hardened: Explicit schema search path and nearest-hour fallback.
+Hardened: Strictly aligned with marts.fct_stop_arrivals (Phase 5).
 """
 
 import logging
@@ -16,10 +16,9 @@ from feature_store.config import FeatureStoreConfig
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass(frozen=True)
 class StopFeatures:
-    """Historical features for a stop at a specific time context."""
+    """Historical features for a stop. Aligned with fct_stop_arrivals schema."""
 
     stop_id: str
     line_id: str
@@ -29,7 +28,7 @@ class StopFeatures:
     longitude: float
     historical_avg_delay: float
     historical_stddev_delay: float
-    avg_dwell_time_seconds: float
+    avg_dwell_time_ms: float  # UPDATED: Matches dbt/Spark output
     historical_arrival_count: int
 
     def to_dict(self) -> Dict[str, Any]:
@@ -42,13 +41,12 @@ class StopFeatures:
             "longitude": self.longitude,
             "historical_avg_delay": self.historical_avg_delay,
             "historical_stddev_delay": self.historical_stddev_delay,
-            "avg_dwell_time_seconds": self.avg_dwell_time_seconds,
+            "avg_dwell_time_ms": self.avg_dwell_time_ms,
             "historical_arrival_count": self.historical_arrival_count,
         }
 
-
 class OfflineStore:
-    """PostgreSQL-based offline feature store."""
+    """PostgreSQL-based offline feature store targeting the 'marts' schema."""
 
     def __init__(self, config: FeatureStoreConfig):
         self._config = config
@@ -66,24 +64,22 @@ class OfflineStore:
             )
             self._conn.autocommit = True
 
+            # Explicitly setting the search path to marts to avoid 'public' shadow tables
             with self._conn.cursor() as cur:
-                cur.execute(f"SET search_path TO {self._config.postgres_schema}, public")
+                cur.execute(f"SET search_path TO marts, public")
 
-            logger.info(f"Connected to PostgreSQL. Schema: {self._config.postgres_schema}")
+            logger.info("Connected to PostgreSQL. Schema context: marts")
         except OperationalError as e:
             logger.error("Failed to connect to PostgreSQL: %s", e)
             raise
-
-    def close(self) -> None:
-        if self._conn and not self._conn.closed:
-            self._conn.close()
 
     def is_healthy(self) -> bool:
         if not self._conn or self._conn.closed:
             return False
         try:
             with self._conn.cursor() as cur:
-                cur.execute("SELECT 1")
+                # Robust health check: Ensure the actual mart table is accessible
+                cur.execute("SELECT 1 FROM fct_stop_arrivals LIMIT 1")
             return True
         except DatabaseError:
             return False
@@ -101,11 +97,7 @@ class OfflineStore:
     def get_stop_features(
         self, stop_id: str, hour_of_day: int, day_of_week: int
     ) -> Optional[StopFeatures]:
-        """
-        Retrieves historical features from the dbt mart.
-        Matches stop_id and provides nearest-hour fallback for robustness.
-        """
-        # UPDATED QUERY: Included latitude and longitude
+        """Retrieves historical features from the dbt mart."""
         query = """
             SELECT
                 stop_id,
@@ -131,7 +123,6 @@ class OfflineStore:
                 row = cur.fetchone()
 
                 if not row:
-                    logger.warning(f"No database record found for stop_id {stop_id}")
                     return None
 
                 return StopFeatures(
@@ -143,7 +134,7 @@ class OfflineStore:
                     longitude=float(row.get("longitude") or 0.0),
                     historical_avg_delay=float(row.get("historical_avg_delay") or 0.0),
                     historical_stddev_delay=float(row.get("historical_stddev_delay") or 0.0),
-                    avg_dwell_time_seconds=float((row.get("avg_dwell_time_ms") or 0.0) / 1000.0),
+                    avg_dwell_time_ms=float(row.get("avg_dwell_time_ms") or 0.0),
                     historical_arrival_count=int(row.get("historical_arrival_count") or 0),
                 )
         except Exception as e:

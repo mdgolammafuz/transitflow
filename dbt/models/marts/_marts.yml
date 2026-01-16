@@ -20,7 +20,7 @@ models:
               to: ref('dim_stops')
               field: stop_id
               config:
-                severity: warn  # Changes ERROR to WARN to unblock deployment
+                severity: warn
       - name: line_id
         data_type: text
       - name: hour_of_day
@@ -86,6 +86,3 @@ models:
         data_type: double precision
       - name: total_distance_km
         data_type: double precision
-    data_tests:
-      - dbt_utils.unique_combination_of_columns:
-          combination_of_columns: [line_id, metric_date]

@@ -82,3 +82,9 @@ dbt/target/
 dbt/dbt_packages/
 dbt/package-lock.yml
 dbt/.user.yml
+
+# Machine Learning artifacts
+mlruns/
+outputs/
+*.pkl
+*.joblib

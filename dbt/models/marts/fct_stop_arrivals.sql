@@ -6,18 +6,26 @@
     ]
 ) }}
 
+/*
+    Mart: fct_stop_arrivals
+    Context: Final Feature Store table for ML Serving (Phase 5/6).
+    Methodical: Uses unified historical_* naming and satisfies dbt contracts.
+*/
+
 with stop_performance as (
-    -- Clean the incoming IDs from the Spark/Intermediate layer
+    -- Reading from the intermediate layer which contains the required contract placeholders
     select 
-        trim(cast(stop_id as text)) as stop_id,
-        trim(cast(line_id as text)) as line_id,
+        stop_id,
+        line_id,
         hour_of_day,
         day_of_week,
         sample_count,
         historical_avg_delay,
         historical_stddev_delay,
         on_time_percentage,
-        avg_dwell_time_ms
+        avg_dwell_time_ms,
+        latitude,
+        longitude
     from {{ ref('int_stop_performance') }}
 ),
 
@@ -27,8 +35,6 @@ stops as (
         trim(cast(stop_id as text)) as stop_id,
         stop_name,
         zone_id,
-        latitude,
-        longitude,
         stop_code
     from {{ ref('dim_stops') }} 
     where is_current = true
@@ -57,16 +63,19 @@ final as (
         sp.hour_of_day,
         sp.day_of_week,
         
+        -- Historical Metrics (Aligned with _marts.yml contract)
         cast(sp.sample_count as bigint) as historical_arrival_count,
         cast(sp.historical_avg_delay as double precision) as historical_avg_delay,
         cast(sp.historical_stddev_delay as double precision) as historical_stddev_delay,
         cast(sp.on_time_percentage as double precision) as historical_on_time_pct,
         cast(sp.avg_dwell_time_ms as double precision) as avg_dwell_time_ms,
         
+        -- Ingredient B: Spatial coordinates (Passed through the lineage)
+        cast(sp.latitude as double precision) as latitude,
+        cast(sp.longitude as double precision) as longitude,
+        
         s.stop_name,
         s.zone_id,
-        cast(s.latitude as double precision) as latitude,
-        cast(s.longitude as double precision) as longitude,
         s.stop_code,
         l.line_name,
         l.line_type
