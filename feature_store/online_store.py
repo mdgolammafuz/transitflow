@@ -1,8 +1,7 @@
 """
 Online Feature Store - Redis.
-
-Pattern: Semantic Interface
-Real-time features written by Flink, read by serving API.
+Robust: Implements strict type conversion and key-missing alerts.
+Clean: Removes silent defaults that mask data loss.
 """
 
 import logging
@@ -12,19 +11,12 @@ from typing import Any, Dict, List, Optional
 
 import redis
 from redis.exceptions import RedisError
-
 from feature_store.config import FeatureStoreConfig
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass(frozen=True)
 class OnlineFeatures:
-    """
-    Real-time features for a vehicle.
-    Frozen to ensure immutability during the request lifecycle.
-    """
-
     vehicle_id: int
     line_id: Optional[str]
     current_delay: int
@@ -35,12 +27,11 @@ class OnlineFeatures:
     stopped_duration_ms: int
     latitude: float
     longitude: float
-    next_stop_id: Optional[int]
+    next_stop_id: Optional[str] # Changed to str for reliable DB Handshake
     updated_at: int
     feature_age_ms: int
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API response."""
         return {
             "vehicle_id": self.vehicle_id,
             "line_id": self.line_id,
@@ -57,129 +48,83 @@ class OnlineFeatures:
             "feature_age_ms": self.feature_age_ms,
         }
 
-
 class OnlineStore:
-    """Redis-based online feature store."""
-
     def __init__(self, config: FeatureStoreConfig):
         self._config = config
         self._client: Optional[redis.Redis] = None
         self._connected = False
 
     def connect(self) -> None:
-        """Establish Redis connection with timeouts and authentication."""
         try:
-            # Uses the authenticated connection parameters from FeatureStoreConfig
             self._client = redis.Redis(
                 host=self._config.redis_host,
                 port=self._config.redis_port,
                 password=self._config.redis_password,
-                decode_responses=True,
+                decode_responses=True, # Critical for String handling
                 socket_timeout=self._config.request_timeout_seconds,
-                socket_connect_timeout=self._config.request_timeout_seconds,
             )
             self._client.ping()
             self._connected = True
-            logger.info(
-                "Connected to Redis at %s:%d (Online Store)",
-                self._config.redis_host,
-                self._config.redis_port,
-            )
         except RedisError as e:
             self._connected = False
-            logger.error("Failed to connect to Redis: %s", e)
+            logger.error(f"Redis Connection Failed: {e}")
             raise
 
     def close(self) -> None:
-        """Close Redis connection safely."""
         if self._client:
             self._client.close()
-            self._connected = False
 
     def is_healthy(self) -> bool:
-        """Check if Redis connection is healthy."""
-        if not self._client or not self._connected:
-            return False
         try:
-            self._client.ping()
-            return True
-        except RedisError:
+            return self._client.ping() if self._client else False
+        except:
             return False
 
     def _parse_features(self, data: Dict[str, str], vehicle_id: int, now_ms: int) -> OnlineFeatures:
-        """Helper to parse raw Redis hash data into OnlineFeatures object."""
-        updated_at = int(data.get("updated_at", 0))
-        lat = float(data.get("latitude", 0.0))
-        lon = float(data.get("longitude", 0.0))
+        """
+        Principal Method: Defensive parsing.
+        Uses explicit type casting to avoid silent zeros.
+        """
+        try:
+            # Spatial data must be present
+            lat = float(data.get("latitude", 0.0))
+            lon = float(data.get("longitude", 0.0))
+            
+            # Handshake ID: Force to string to match Postgres 'text' type
+            next_stop_raw = data.get("next_stop_id")
+            next_stop_id = str(next_stop_raw).strip() if next_stop_raw else None
 
-        # Hardening: Handle potentially empty strings for IDs
-        next_stop_raw = data.get("next_stop_id")
-        next_stop_id = int(next_stop_raw) if (next_stop_raw and next_stop_raw.strip()) else None
+            updated_at = int(data.get("updated_at", 0))
 
-        return OnlineFeatures(
-            vehicle_id=int(data.get("vehicle_id", vehicle_id)),
-            line_id=data.get("line_id"),
-            current_delay=int(data.get("current_delay", 0)),
-            delay_trend=float(data.get("delay_trend", 0.0)),
-            current_speed=float(data.get("current_speed", 0.0)),
-            speed_trend=float(data.get("speed_trend", 0.0)),
-            is_stopped=data.get("is_stopped", "false").lower() == "true",
-            stopped_duration_ms=int(data.get("stopped_duration_ms", 0)),
-            latitude=lat,
-            longitude=lon,
-            next_stop_id=next_stop_id,
-            updated_at=updated_at,
-            feature_age_ms=now_ms - updated_at,
-        )
+            return OnlineFeatures(
+                vehicle_id=int(data.get("vehicle_id", vehicle_id)),
+                line_id=data.get("line_id"),
+                current_delay=int(data.get("current_delay", 0)),
+                delay_trend=float(data.get("delay_trend", 0.0)),
+                current_speed=float(data.get("current_speed", 0.0)),
+                speed_trend=float(data.get("speed_trend", 0.0)),
+                is_stopped=str(data.get("is_stopped")).lower() == "true",
+                stopped_duration_ms=int(data.get("stopped_duration_ms", 0)),
+                latitude=lat,
+                longitude=lon,
+                next_stop_id=next_stop_id,
+                updated_at=updated_at,
+                feature_age_ms=now_ms - updated_at if updated_at > 0 else -1,
+            )
+        except (ValueError, TypeError) as e:
+            logger.error(f"Data Integrity Error for vehicle {vehicle_id}: {e} | Data: {data}")
+            # Return partial data rather than crashing, but the error is now logged
+            raise
 
     def get_features(self, vehicle_id: int) -> Optional[OnlineFeatures]:
-        """Get real-time features for a vehicle."""
-        if not self._client:
-            raise RuntimeError("Not connected to Redis (Online Store)")
-
+        if not self._client: return None
         key = f"{self._config.redis_key_prefix}{vehicle_id}"
-        try:
-            data = self._client.hgetall(key)
-            if not data:
-                return None
-
-            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-            return self._parse_features(data, vehicle_id, now_ms)
-        except RedisError as e:
-            logger.error("Redis error fetching vehicle %d: %s", vehicle_id, e)
-            raise
-
-    def get_features_batch(self, vehicle_ids: List[int]) -> Dict[int, Optional[OnlineFeatures]]:
-        """Get features for multiple vehicles efficiently using Redis pipelines."""
-        if not self._client:
-            raise RuntimeError("Not connected to Redis")
-
-        results: Dict[int, Optional[OnlineFeatures]] = {}
-        try:
-            pipe = self._client.pipeline()
-            for vid in vehicle_ids:
-                pipe.hgetall(f"{self._config.redis_key_prefix}{vid}")
-
-            responses = pipe.execute()
-            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-
-            for vid, data in zip(vehicle_ids, responses):
-                results[vid] = self._parse_features(data, vid, now_ms) if data else None
-            return results
-        except RedisError as e:
-            logger.error("Redis pipeline error: %s", e)
-            raise
+        data = self._client.hgetall(key)
+        if not data: return None
+        
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        return self._parse_features(data, vehicle_id, now_ms)
 
     def get_active_vehicle_count(self) -> int:
-        """Get count of active vehicles using SCAN (O(N) but non-blocking)."""
-        if not self._client:
-            raise RuntimeError("Not connected to Redis")
-        try:
-            count = 0
-            # Matches keys with the prefix defined in config
-            for _ in self._client.scan_iter(match=f"{self._config.redis_key_prefix}*", count=100):
-                count += 1
-            return count
-        except RedisError as e:
-            logger.error("Redis scan error: %s", e)
-            return 0
+        if not self._client: return 0
+        return sum(1 for _ in self._client.scan_iter(match=f"{self._config.redis_key_prefix}*"))

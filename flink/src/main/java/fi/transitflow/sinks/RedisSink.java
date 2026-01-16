@@ -46,6 +46,14 @@ public class RedisSink extends RichSinkFunction<EnrichedEvent> {
         features.put("delay_trend", String.format("%.4f", event.getDelayTrend()));
         features.put("is_stopped", String.valueOf(event.isStopped()));
         features.put("updated_at", String.valueOf(event.getEventTimeMs()));
+        features.put("latitude", String.valueOf(event.getLatitude()));
+        features.put("longitude", String.valueOf(event.getLongitude()));
+        features.put("current_delay", String.valueOf(event.getDelaySeconds()));
+        features.put("current_speed", String.valueOf(event.getSpeedMs()));
+        
+        if (event.getNextStopId() != null) {
+            features.put("next_stop_id", String.valueOf(event.getNextStopId()));
+        }
 
         try (Jedis jedis = jedisPool.getResource()) {
             jedis.hset(key, features);
