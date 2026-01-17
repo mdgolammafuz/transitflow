@@ -94,10 +94,19 @@ class OfflineStore:
         finally:
             cur.close()
 
+
     def get_stop_features(
-        self, stop_id: str, hour_of_day: int, day_of_week: int
+        self, 
+        stop_id: str, 
+        line_id: Optional[str] = None,
+        hour_of_day: Optional[int] = None, 
+        day_of_week: Optional[int] = None
     ) -> Optional[StopFeatures]:
-        """Retrieves historical features from the dbt mart."""
+        """
+        Retrieves historical features from the dbt mart with contextual fallback.
+        Hardened: Uses line_id to ensure semantic correctness.
+        """
+        # We use a CTE or complex ORDER BY to find the 'closest' temporal match
         query = """
             SELECT
                 stop_id,
@@ -112,6 +121,7 @@ class OfflineStore:
                 historical_arrival_count
             FROM fct_stop_arrivals
             WHERE stop_id = %s
+            AND (%s IS NULL OR line_id = %s)
             ORDER BY
                 (hour_of_day = %s AND day_of_week = %s) DESC,
                 ABS(hour_of_day - %s) ASC
@@ -119,10 +129,18 @@ class OfflineStore:
         """
         try:
             with self._cursor() as cur:
-                cur.execute(query, (str(stop_id), hour_of_day, day_of_week, hour_of_day))
+                # Pass parameters twice for the 'IS NULL OR' check and the 'ORDER BY' logic
+                params = (
+                    str(stop_id), 
+                    line_id, line_id, 
+                    hour_of_day, day_of_week, 
+                    hour_of_day
+                )
+                cur.execute(query, params)
                 row = cur.fetchone()
 
                 if not row:
+                    logger.warning(f"No historical data found for Stop: {stop_id} | Line: {line_id}")
                     return None
 
                 return StopFeatures(
@@ -138,5 +156,5 @@ class OfflineStore:
                     historical_arrival_count=int(row.get("historical_arrival_count") or 0),
                 )
         except Exception as e:
-            logger.error(f"PostgreSQL fetch crash: {e}")
+            logger.error(f"PostgreSQL fetch failure: {e}")
             raise
