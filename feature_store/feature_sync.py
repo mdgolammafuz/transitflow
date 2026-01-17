@@ -3,7 +3,7 @@ Feature Sync Job - Delta Lake to PostgreSQL.
 
 Pattern: Atomic Staging-to-Mart Upsert
 Methodical: Aligned with Phase 5 validated dbt Marts (marts.fct_stop_arrivals).
-Security: Hardened JDBC properties & Zero-Secret Architecture.
+Robust: Implements hardened feature_id generation and NULL-safe casting.
 """
 
 import logging
@@ -49,18 +49,19 @@ def read_stop_performance(spark: SparkSession, bucket: str) -> DataFrame:
     
     df = spark.read.format("delta").load(gold_path)
 
-    # Strictly align types and names with fct_stop_arrivals contract
+    # Principal Fix: Use coalesce to prevent NULL IDs from breaking the MD5 hash
+    # and trim strings to ensure exact matches with real-time telemetry.
     return df.select(
-        F.trim(F.col("stop_id").cast("string")).alias("stop_id"),
-        F.trim(F.col("line_id").cast("string")).alias("line_id"),
+        F.coalesce(F.trim(F.col("stop_id").cast("string")), F.lit("UNKNOWN")).alias("stop_id"),
+        F.coalesce(F.trim(F.col("line_id").cast("string")), F.lit("UNKNOWN")).alias("line_id"),
         F.col("hour_of_day").cast("int"),
         F.col("day_of_week").cast("int"),
-        F.col("latitude").cast("double"),  # Match Postgres double precision
+        F.col("latitude").cast("double"),
         F.col("longitude").cast("double"),
         F.col("historical_avg_delay").cast("double"),
         F.col("historical_arrival_count").cast("long"),
         F.col("avg_dwell_time_ms").cast("double"),
-        # Standard placeholder for fields not yet in Spark Gold logic
+        # Methodical: Placeholder aligned with offline_store.StopFeatures dataclass
         F.lit(0.0).cast("double").alias("historical_stddev_delay")
     ).na.fill(0.0)
 
@@ -84,7 +85,8 @@ def write_to_postgres(df: DataFrame) -> int:
     logger.info(f"Writing to staging table: {temp_table}")
     df.write.jdbc(url=jdbc_url, table=temp_table, mode="overwrite", properties=properties)
 
-    # 2. Perform Atomic Upsert using the md5-based feature_id
+    # 2. Perform Atomic Upsert using hardened feature_id generation.
+    # Principal Fix: Ensuring the separator and coalesce logic mirrors dbt/marts.
     upsert_sql = """
         INSERT INTO marts.fct_stop_arrivals (
             feature_id, stop_id, line_id, hour_of_day, day_of_week,
@@ -94,7 +96,8 @@ def write_to_postgres(df: DataFrame) -> int:
             valid_from, is_current
         )
         SELECT
-            md5(stop_id || '|' || line_id || '|' || hour_of_day || '|' || CAST(day_of_week AS TEXT)) as feature_id,
+            md5(COALESCE(stop_id, '') || '-' || COALESCE(line_id, '') || '-' || 
+                CAST(hour_of_day AS TEXT) || '-' || CAST(day_of_week AS TEXT)) as feature_id,
             stop_id, line_id, hour_of_day, day_of_week,
             latitude, longitude,
             historical_arrival_count, historical_avg_delay,
@@ -116,9 +119,9 @@ def write_to_postgres(df: DataFrame) -> int:
     try:
         with conn.cursor() as cur:
             cur.execute(upsert_sql)
-            cur.execute(f"DROP TABLE {temp_table}") # Clean up
+            cur.execute(f"DROP TABLE {temp_table}")
         conn.commit()
-        logger.info("Upsert completed successfully and staging table dropped.")
+        logger.info("Atomic upsert completed successfully.")
     finally:
         conn.close()
 
