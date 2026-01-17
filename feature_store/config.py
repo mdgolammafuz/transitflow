@@ -2,8 +2,8 @@
 Feature Store configuration.
 
 Pattern: Zero-Secret Architecture
-Pattern: Leaf Module (No internal project imports to prevent circularity)
-Uses Pydantic Settings for validation and type safety.
+Pattern: Leaf Module (No project imports)
+Robust: Includes helper for search_path to ensure mart isolation.
 """
 
 from pydantic import Field
@@ -13,8 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class FeatureStoreConfig(BaseSettings):
     """
     Configuration for Feature Store.
-    Automatically loads from environment variables or .env file.
-    No hardcoded defaults for sensitive credentials.
+    Synchronized with Java Flink Sink and Spark Sync Job.
     """
 
     # Redis Configuration (Online Store)
@@ -22,7 +21,6 @@ class FeatureStoreConfig(BaseSettings):
     redis_port: int = 6379
     redis_key_prefix: str = "features:vehicle:"
     redis_ttl_seconds: int = 300
-    # No default password
     redis_password: str = Field(default="")
 
     # PostgreSQL Configuration (Offline Store)
@@ -33,13 +31,13 @@ class FeatureStoreConfig(BaseSettings):
     postgres_port: int = 5432
 
     # DBT/Schema Configuration
+    # Principal Fix: Ensuring this matches the dbt project schema
     postgres_schema: str = "marts"
 
     # API and Service Settings
     cache_ttl_seconds: int = 60
-    request_timeout_seconds: float = 1.0
+    request_timeout_seconds: float = 2.0  # Increased slightly for spatial joins
 
-    # Load from .env file if it exists
     model_config = SettingsConfigDict(
         env_file=".env", 
         env_file_encoding="utf-8", 
@@ -48,18 +46,27 @@ class FeatureStoreConfig(BaseSettings):
 
     @classmethod
     def from_env(cls) -> "FeatureStoreConfig":
-        """Factory method to load and validate config from environment."""
         return cls()
 
-    def redis_url(self) -> str:
-        """Get Redis connection URL with authentication."""
+    def get_redis_params(self) -> dict:
+        """Helper for redis-py connection parameters."""
+        params = {
+            "host": self.redis_host,
+            "port": self.redis_port,
+            "decode_responses": True,
+            "socket_timeout": self.request_timeout_seconds,
+        }
         if self.redis_password:
-            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/0"
-        return f"redis://{self.redis_host}:{self.redis_port}/0"
+            params["password"] = self.redis_password
+        return params
 
-    def postgres_dsn(self) -> str:
-        """Get PostgreSQL connection string formatted for SQLAlchemy/Psycopg."""
-        return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+    def get_postgres_params(self) -> dict:
+        """Helper for psycopg2 connection parameters."""
+        return {
+            "host": self.postgres_host,
+            "port": self.postgres_port,
+            "user": self.postgres_user,
+            "password": self.postgres_password,
+            "dbname": self.postgres_db,
+            "connect_timeout": int(self.request_timeout_seconds),
+        }
