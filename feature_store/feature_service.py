@@ -166,7 +166,7 @@ class FeatureService:
         hour_of_day: Optional[int] = None,
         day_of_week: Optional[int] = None,
     ) -> CombinedFeatures:
-        """Orchestrates retrieval with context inference and fallback."""
+        """Orchestrates retrieval with strict contextual handshake."""
         now = datetime.now(timezone.utc)
         request_timestamp = int(now.timestamp() * 1000)
 
@@ -177,33 +177,40 @@ class FeatureService:
         online_data = None
         offline_data = None
 
-        # 1. Fetch Online Features
+        # 1. Fetch Online Features (The "Trigger" for context)
         self._metrics.online_requests += 1
         try:
             online_data = self._online_store.get_features(vehicle_id)
             if online_data:
                 self._metrics.online_hits += 1
-                # Context enrichment from real-time data
-                if stop_id is None and online_data.next_stop_id:
-                    stop_id = str(online_data.next_stop_id)
+                
+                # Use Live Data to populate the Handshake Keys if not overridden
+                if stop_id is None:
+                    stop_id = online_data.next_stop_id
                 if line_id is None:
                     line_id = online_data.line_id
         except Exception as e:
             self._metrics.online_errors += 1
-            logger.error(f"Error fetching online features for vehicle {vehicle_id}: {e}")
+            logger.error(f"Online store failure for vehicle {vehicle_id}: {e}")
 
-        # 2. Fetch Offline Features
+        # 2. Fetch Offline Features (The "Handshake")
         if stop_id:
             self._metrics.offline_requests += 1
             try:
+                # We now pass line_id to ensure the historical match is precise
                 offline_data = self._offline_store.get_stop_features(
-                    stop_id=stop_id, hour_of_day=h_ctx, day_of_week=d_ctx
+                    stop_id=stop_id, 
+                    line_id=line_id, 
+                    hour_of_day=h_ctx, 
+                    day_of_week=d_ctx
                 )
                 if offline_data:
                     self._metrics.offline_hits += 1
+                else:
+                    logger.warning(f"Handshake failed: No history for Stop {stop_id} | Line {line_id}")
             except Exception as e:
                 self._metrics.offline_errors += 1
-                logger.error(f"Error fetching offline features for stop {stop_id}: {e}")
+                logger.error(f"Offline store failure for stop {stop_id}: {e}")
 
         return CombinedFeatures(
             vehicle_id=vehicle_id,
