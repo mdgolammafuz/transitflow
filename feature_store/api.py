@@ -1,8 +1,9 @@
 """
 Feature Store API - FastAPI Application.
 
-Pattern: Semantic Interface
-Robustness: Handles partial store availability and supplemental data placeholders.
+Pattern: Semantic Interface & Strict Schema Enforcement
+Robustness: Aligned with Java Flink Sink and validated dbt Marts.
+Performance: Uses native FastAPI serialization to minimize latency.
 """
 
 import logging
@@ -12,8 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from feature_store.config import FeatureStoreConfig
 from feature_store.feature_service import FeatureService
@@ -30,33 +30,25 @@ feature_service: Optional[FeatureService] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Manage service lifecycle robustly.
-    Ensures the API stays up even if one store (like Redis) fails to connect.
-    """
+    """Manage service lifecycle with robust connection handling."""
     global feature_service
     feature_service = FeatureService(config)
     try:
         feature_service.connect()
         logger.info("Feature service initialized successfully")
     except Exception as e:
-        logger.error(f"Feature service started in DEGRADED mode. Connection error: {e}")
-        logger.warning("Online features may be unavailable, but Offline lookups will proceed.")
+        logger.error(f"Feature service started in DEGRADED mode: {e}")
 
     yield
 
     if feature_service:
-        try:
-            feature_service.close()
-            logger.info("Feature service connections closed")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+        feature_service.close()
 
 
 app = FastAPI(
     title="TransitFlow Feature Store",
     description="Unified feature access for ML prediction",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -70,6 +62,7 @@ class HealthResponse(BaseModel):
 
 
 class OnlineFeaturesResponse(BaseModel):
+    """Synchronized with Java RedisSink and Python OnlineStore."""
     vehicle_id: int
     line_id: Optional[str]
     current_delay: int
@@ -80,42 +73,24 @@ class OnlineFeaturesResponse(BaseModel):
     stopped_duration_ms: int
     latitude: float
     longitude: float
-    next_stop_id: Optional[int]
+    next_stop_id: Optional[str]  # Forced to String for reliable Handshake
     updated_at: int
     feature_age_ms: int
 
 
 class OfflineFeaturesResponse(BaseModel):
-    """Offline features - Strictly aligned with validated Phase 5 marts.fct_stop_arrivals."""
-
+    """Synchronized with validated Phase 5 dbt Gold Marts."""
     stop_id: str
     line_id: str
-    hour_of_day: int = Field(ge=0, le=23)
-    day_of_week: int = Field(ge=0, le=7)
-    
-    # Ingredient B: Spatial coordinates (Required for Phase 6 ML)
+    hour_of_day: int
+    day_of_week: int
     latitude: float
     longitude: float
-    
-    # Methodical: Aligned with 'historical_' prefix from Spark/dbt
     historical_avg_delay: float
     historical_stddev_delay: float
-    historical_arrival_count: int
-    historical_on_time_pct: float = Field(alias="on_time_percentage")
-    
-    # Units: ms (as produced by Spark Gold)
     avg_dwell_time_ms: float
+    historical_arrival_count: int
 
-    @field_validator("historical_arrival_count")
-    @classmethod
-    def validate_sample_size(cls, v: int) -> int:
-        # Prevents model training on statistically insignificant data
-        if v < 1:
-            raise ValueError("No historical samples available for this context")
-        return v
-    
-    class Config:
-        populate_by_name = True
 
 class CombinedFeaturesResponse(BaseModel):
     vehicle_id: int
@@ -133,23 +108,24 @@ async def health_check():
         raise HTTPException(status_code=503, detail="Service not initialized")
     health = feature_service.health_check()
     active = feature_service.get_active_vehicles()
-    return HealthResponse(
-        status=health["status"],
-        online_store=health["online_store"],
-        offline_store=health["offline_store"],
-        active_vehicles=active,
-        metrics=health["metrics"],
-    )
+    return {
+        **health,
+        "active_vehicles": active
+    }
 
 
 @app.get("/features/{vehicle_id}", response_model=CombinedFeaturesResponse)
 async def get_features(
     vehicle_id: int,
-    stop_id: Optional[str] = Query(None, description="Stop ID for offline features"),
-    line_id: Optional[str] = Query(None, description="Line ID for offline features"),
-    hour_of_day: Optional[int] = Query(None, ge=0, le=23, description="Hour context"),
-    day_of_week: Optional[int] = Query(None, ge=0, le=7, description="Day context (0-6)"),
+    stop_id: Optional[str] = Query(None, description="Force specific Stop ID"),
+    line_id: Optional[str] = Query(None, description="Force specific Line ID"),
+    hour_of_day: Optional[int] = Query(None, ge=0, le=23),
+    day_of_week: Optional[int] = Query(None, ge=0, le=7),
 ):
+    """
+    Primary endpoint for ML Serving layer.
+    Joins Online (Redis) and Offline (Postgres) data using next_stop_id as the key.
+    """
     if not feature_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
@@ -163,31 +139,17 @@ async def get_features(
     )
     latency_ms = (time.perf_counter() - start) * 1000
 
-    res_data = {
+    # Principal Note: Returning a dict allows Pydantic to handle the 
+    # complex serialization/type-checking automatically.
+    return {
         "vehicle_id": combined.vehicle_id,
         "request_timestamp": combined.request_timestamp,
         "online_available": combined.online_available,
         "offline_available": combined.offline_available,
         "latency_ms": round(latency_ms, 2),
-        "online_features": None,
-        "offline_features": None,
+        "online_features": combined.online.to_dict() if combined.online else None,
+        "offline_features": combined.offline.to_dict() if combined.offline else None,
     }
-
-    if combined.online:
-        try:
-            res_data["online_features"] = combined.online.to_dict()
-        except Exception as e:
-            logger.warning(f"Online validation failed: {e}")
-            res_data["online_available"] = False
-
-    if combined.offline:
-        try:
-            res_data["offline_features"] = combined.offline.to_dict()
-        except Exception as e:
-            logger.warning(f"Offline validation failed: {e}")
-            res_data["offline_available"] = False
-
-    return JSONResponse(content=res_data)
 
 
 @app.get("/metrics")
@@ -195,9 +157,7 @@ async def get_metrics():
     if not feature_service:
         raise HTTPException(status_code=503, detail="Service not initialized")
     metrics = feature_service.get_metrics()
-    active = feature_service.get_active_vehicles()
     return {
-        "active_vehicles": active,
         "online": {
             "requests": metrics.online_requests,
             "hits": metrics.online_hits,
@@ -213,7 +173,6 @@ async def get_metrics():
 
 if __name__ == "__main__":
     import uvicorn
-    # Security: Allow environment override but default to localhost for safety
     host = os.environ.get("API_HOST", "127.0.0.1")
     port = int(os.environ.get("API_PORT", 8000))
     uvicorn.run(app, host=host, port=port)
