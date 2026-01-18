@@ -1,7 +1,7 @@
 """
 MQTT client for HSL vehicle position feed.
-
-Handles connection, subscription, reconnection, and message parsing.
+Pattern: Event-Driven Ingestion
+Aligned: Uses UTC-aware latency tracking and string-based ID filtering.
 """
 
 import json
@@ -24,9 +24,7 @@ logger = logging.getLogger(__name__)
 class HSLMQTTClient:
     """
     MQTT client for HSL real-time vehicle positions.
-
-    Connects to mqtt.hsl.fi, subscribes to vehicle position topics,
-    and invokes callback for each validated message.
+    Handles high-throughput subscription to the /hfp/v2/ feed.
     """
 
     def __init__(
@@ -39,7 +37,7 @@ class HSLMQTTClient:
         self.config = config
         self.on_message = on_message
         self.on_invalid = on_invalid
-        self.filter_line = filter_line
+        self.filter_line = str(filter_line)  # Aligned: Treat as string for comparison
         self.metrics = get_metrics()
 
         self._client: Optional[mqtt.Client] = None
@@ -47,10 +45,10 @@ class HSLMQTTClient:
         self._reconnect_delay = config.reconnect_delay_min
 
     def _create_client(self) -> mqtt.Client:
-        """Create and configure MQTT client."""
+        """Create and configure the MQTT client with V5 support intent via V2 callback API."""
         client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=f"transit-ingest-{int(time.time())}",
+            client_id=f"transitflow-ingest-{int(time.time())}",
         )
 
         client.on_connect = self._on_connect
@@ -58,97 +56,99 @@ class HSLMQTTClient:
         client.on_message = self._on_message
 
         if self.config.use_tls:
-            # HSL uses TLS but doesn't require client certs
+            # HSL uses TLS 1.2+ but is a public broker
+            # ssl.CERT_NONE used because HSL doesn't require client certs
             client.tls_set(cert_reqs=ssl.CERT_NONE)
             client.tls_insecure_set(True)
 
         return client
 
     def _on_connect(self, client, userdata, flags, rc, properties=None):
-        """Handle MQTT connection."""
+        """Handle successful connection to HSL."""
         if rc == 0:
-            logger.info("Connected to MQTT broker: %s:%d", self.config.host, self.config.port)
+            logger.info("Connection established: %s:%d", self.config.host, self.config.port)
             self._connected = True
             self.metrics.set_mqtt_connected(True)
             self._reconnect_delay = self.config.reconnect_delay_min
 
-            # Subscribe to topic
+            # Subscribe to the HSL HFP Topic
             client.subscribe(self.config.topic)
-            logger.info("Subscribed to: %s", self.config.topic)
+            logger.info("Subscription active: %s", self.config.topic)
         else:
-            logger.error("MQTT connection failed with code: %d", rc)
+            logger.error("MQTT connection failed with return code: %d", rc)
             self._connected = False
             self.metrics.set_mqtt_connected(False)
 
     def _on_disconnect(self, client, userdata, rc, properties=None, reason_code=None):
-        """Handle MQTT disconnection."""
-        logger.warning("Disconnected from MQTT broker (rc=%s)", rc)
+        """Handle disconnection with logging for circuit breaker visibility."""
+        logger.warning("Disconnected from HSL broker. Return code: %s", rc)
         self._connected = False
         self.metrics.set_mqtt_connected(False)
 
     def _on_message(self, client, userdata, msg):
-        """Handle incoming MQTT message."""
+        """
+        Ingest raw bytes, validate against contract, and calculate ingest-lag.
+        """
         receive_time = time.time()
         self.metrics.record_received()
 
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
 
-            # HSL wraps data in "VP" object
+            # Extract the 'Vehicle Position' (VP) wrapper from HSL JSON
             vp_data = payload.get("VP")
             if not vp_data:
-                self.metrics.record_invalid(reason="missing_vp")
+                self.metrics.record_invalid(reason="missing_vp_wrapper")
                 return
 
-            # Optional line filtering
-            if self.filter_line and vp_data.get("desi") != self.filter_line:
+            # Apply line filter before heavy validation to save CPU
+            # desi (designation) is the user-facing line ID
+            if self.filter_line and str(vp_data.get("desi")) != self.filter_line:
                 return
 
-            # Parse raw payload
+            # Aligned: Parse raw payload and convert to UTC-forced Model
             raw = RawHSLPayload.model_validate(vp_data)
-
-            # Convert to validated model
             position = raw.to_vehicle_position()
 
             self.metrics.record_validated()
 
-            # Track latency from event time to now
+            # Record Ingest Latency (How 'old' is the data when we touch it?)
+            # Aligned: position.timestamp is forced UTC via pydantic validator
             event_time = position.timestamp.timestamp()
             latency = receive_time - event_time
             if latency > 0:
                 self.metrics.observe_mqtt_latency(latency)
 
-            # Invoke callback
+            # Pass to Bridge Orchestrator
             self.on_message(position)
 
         except json.JSONDecodeError as e:
-            self.metrics.record_invalid(reason="json_decode")
+            self.metrics.record_invalid(reason="corrupt_json")
             self._send_to_dlq(msg.payload.decode("utf-8", errors="replace"), str(e), msg.topic)
 
         except ValidationError as e:
-            self.metrics.record_invalid(reason="validation")
+            self.metrics.record_invalid(reason="contract_violation")
             self._send_to_dlq(msg.payload.decode("utf-8", errors="replace"), str(e), msg.topic)
 
         except Exception as e:
-            self.metrics.record_invalid(reason="unknown")
-            logger.exception("Unexpected error processing message")
+            self.metrics.record_invalid(reason="runtime_error")
+            logger.exception("Internal Bridge Error: %s", str(e))
             self._send_to_dlq(msg.payload.decode("utf-8", errors="replace"), str(e), msg.topic)
 
     def _send_to_dlq(self, raw_payload: str, error: str, topic: str):
-        """Send invalid message to dead letter queue handler."""
+        """Helper to format and route failures to the DLQ handler."""
         invalid = InvalidEvent(
-            raw_payload=raw_payload[:10000],  # Truncate if huge
-            error_message=error[:1000],
+            raw_payload=raw_payload[:5000],  # Guard against massive payloads
+            error_message=error,
             topic=topic,
-            received_at=datetime.now(timezone.utc),
+            received_at=datetime.now(timezone.utc),  # Aligned: UTC audit time
         )
         self.on_invalid(invalid)
 
     def connect(self):
-        """Connect to MQTT broker."""
+        """Initialize the client and attempt connection."""
         self._client = self._create_client()
-
-        logger.info("Connecting to %s:%d...", self.config.host, self.config.port)
+        logger.info("Connecting to HSL MQTT at %s...", self.config.host)
         self._client.connect(
             self.config.host,
             self.config.port,
@@ -156,26 +156,24 @@ class HSLMQTTClient:
         )
 
     def start(self):
-        """Start the MQTT client loop (blocking)."""
+        """Blocking loop for foreground execution (Standard)."""
         if not self._client:
             self.connect()
-
-        logger.info("Starting MQTT loop...")
-        self._client.loop_forever()
+        logger.info("MQTT Loop started (Blocking mode)")
+        self._client.loop_forever(retry_first_connection=True)
 
     def start_background(self):
-        """Start MQTT client loop in background thread."""
+        """Non-blocking loop for multi-threaded testing."""
         if not self._client:
             self.connect()
-
         self._client.loop_start()
 
     def stop(self):
-        """Stop the MQTT client."""
+        """Graceful shutdown of the MQTT listener."""
         if self._client:
+            logger.info("Disconnecting MQTT client...")
             self._client.loop_stop()
             self._client.disconnect()
-            logger.info("MQTT client stopped")
 
     @property
     def connected(self) -> bool:
