@@ -4,15 +4,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Stop arrival event - serves as labeled training data for ML.
- * Emitted when a vehicle arrives at a new stop.
+ * Hardened: Uses String IDs for vehicle and stop to ensure metadata join integrity.
  */
 public class StopArrival {
 
     @JsonProperty("vehicle_id")
-    private int vehicleId;
+    private String vehicleId; // Aligned: String ID
 
     @JsonProperty("stop_id")
-    private int stopId;
+    private String stopId; // Aligned: Critical for GTFS/Static joins
 
     @JsonProperty("line_id")
     private String lineId;
@@ -40,7 +40,7 @@ public class StopArrival {
 
     public StopArrival() {}
 
-    public StopArrival(int vehicleId, int stopId, String lineId, int directionId,
+    public StopArrival(String vehicleId, String stopId, String lineId, int directionId,
                        long arrivalTime, int delayAtArrival, boolean doorOpened,
                        double latitude, double longitude) {
         this.vehicleId = vehicleId;
@@ -54,9 +54,9 @@ public class StopArrival {
         this.longitude = longitude;
     }
 
-    // Getters
-    public int getVehicleId() { return vehicleId; }
-    public int getStopId() { return stopId; }
+    // --- Getters ---
+    public String getVehicleId() { return vehicleId; }
+    public String getStopId() { return stopId; }
     public String getLineId() { return lineId; }
     public int getDirectionId() { return directionId; }
     public long getArrivalTime() { return arrivalTime; }
@@ -66,12 +66,12 @@ public class StopArrival {
     public double getLatitude() { return latitude; }
     public double getLongitude() { return longitude; }
 
-    // Setters
+    // --- Setters ---
     public void setDwellTimeMs(Long dwellTimeMs) { this.dwellTimeMs = dwellTimeMs; }
 
     @Override
     public String toString() {
-        return String.format("StopArrival{vehicle=%d, stop=%d, line=%s, delay=%ds}",
+        return String.format("StopArrival{vehicle=%s, stop=%s, line=%s, delay=%ds}",
                 vehicleId, stopId, lineId, delayAtArrival);
     }
 }

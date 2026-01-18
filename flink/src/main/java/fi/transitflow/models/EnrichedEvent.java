@@ -4,12 +4,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Enriched event with computed features.
- * Output to Kafka for batch layer and downstream consumers.
+ * Hardened: vehicle_id and next_stop_id use String to match the principal verdict.
+ * Aligned: door_status uses int (0/1) for Avro/Lakehouse consistency.
  */
 public class EnrichedEvent {
 
     @JsonProperty("vehicle_id")
-    private int vehicleId;
+    private String vehicleId; // Aligned: String ID
 
     @JsonProperty("timestamp")
     private String timestamp;
@@ -33,7 +34,7 @@ public class EnrichedEvent {
     private int delaySeconds;
 
     @JsonProperty("door_status")
-    private boolean doorStatus;
+    private int doorStatus; // Aligned: 0 (closed) or 1 (open)
 
     @JsonProperty("line_id")
     private String lineId;
@@ -45,9 +46,9 @@ public class EnrichedEvent {
     private int operatorId;
 
     @JsonProperty("next_stop_id")
-    private Integer nextStopId;
+    private String nextStopId; // Aligned: String ID
 
-    // Computed features
+    // Computed features for ML Inference and Feature Store
     @JsonProperty("delay_trend")
     private double delayTrend;
 
@@ -87,7 +88,7 @@ public class EnrichedEvent {
             event.speedMs = pos.getSpeedMs();
             event.heading = pos.getHeading();
             event.delaySeconds = pos.getDelaySeconds();
-            event.doorStatus = pos.isDoorOpen();
+            event.doorStatus = pos.getDoorStatus(); 
             event.lineId = pos.getLineId();
             event.directionId = pos.getDirectionId();
             event.operatorId = pos.getOperatorId();
@@ -106,8 +107,8 @@ public class EnrichedEvent {
         public EnrichedEvent build() { return event; }
     }
 
-    // Getters
-    public int getVehicleId() { return vehicleId; }
+    // --- Getters ---
+    public String getVehicleId() { return vehicleId; }
     public String getTimestamp() { return timestamp; }
     public long getEventTimeMs() { return eventTimeMs; }
     public double getLatitude() { return latitude; }
@@ -115,11 +116,11 @@ public class EnrichedEvent {
     public double getSpeedMs() { return speedMs; }
     public int getHeading() { return heading; }
     public int getDelaySeconds() { return delaySeconds; }
-    public boolean isDoorOpen() { return doorStatus; }
+    public int getDoorStatus() { return doorStatus; }
     public String getLineId() { return lineId; }
     public int getDirectionId() { return directionId; }
     public int getOperatorId() { return operatorId; }
-    public Integer getNextStopId() { return nextStopId; }
+    public String getNextStopId() { return nextStopId; }
     public double getDelayTrend() { return delayTrend; }
     public double getSpeedTrend() { return speedTrend; }
     public double getDistanceSinceLastM() { return distanceSinceLastM; }

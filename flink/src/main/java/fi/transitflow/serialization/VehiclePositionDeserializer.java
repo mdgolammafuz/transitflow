@@ -12,7 +12,8 @@ import java.io.IOException;
 
 /**
  * Robust JSON Deserializer for VehiclePosition.
- * Uses lazy initialization to prevent null pointers after serialization.
+ * Hardened: Supports String IDs and logical timestamp-millis.
+ * Reliability: Implements lazy initialization for cross-node stability.
  */
 public class VehiclePositionDeserializer implements DeserializationSchema<VehiclePosition> {
 
@@ -24,7 +25,7 @@ public class VehiclePositionDeserializer implements DeserializationSchema<Vehicl
     private void ensureMapper() {
         if (mapper == null) {
             mapper = new ObjectMapper();
-            // Supports Java 8 Time types (logicalType: timestamp-millis)
+            // Supports logicalType: timestamp-millis used in Avro schemas
             mapper.registerModule(new JavaTimeModule());
         }
     }
@@ -43,10 +44,11 @@ public class VehiclePositionDeserializer implements DeserializationSchema<Vehicl
         ensureMapper();
 
         try {
+            // This will successfully map String vehicle_id from ingestion phase to our POJO
             return mapper.readValue(message, VehiclePosition.class);
         } catch (Exception e) {
-            // Log at debug level to avoid flooding logs with malformed data errors
-            LOG.debug("Failed to deserialize message: {}", new String(message), e);
+            // Pattern: Cloud-Native Observability (Don't kill the cluster for one bad byte)
+            LOG.warn("Dropped malformed telemetry event. Error: {}", e.getMessage());
             return null; 
         }
     }

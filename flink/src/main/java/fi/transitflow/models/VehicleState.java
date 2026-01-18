@@ -4,8 +4,8 @@ import java.io.Serializable;
 import java.util.LinkedList;
 
 /**
- * Per-vehicle state maintained in Flink.
- * Consistent with simple trend calculations.
+ * Per-vehicle state maintained in Flink memory.
+ * Uses String IDs for state consistency with Avro
  */
 public class VehicleState implements Serializable {
 
@@ -21,7 +21,7 @@ public class VehicleState implements Serializable {
     private LinkedList<Integer> delayHistory;
     private int historySize;
 
-    private Integer lastStopId;
+    private String lastStopId; // Aligned: String
     private Long stoppedSinceMs;
     private Long doorOpenSinceMs;
 
@@ -36,23 +36,27 @@ public class VehicleState implements Serializable {
     }
 
     public void update(VehiclePosition pos, boolean isStopped) {
+        // Track delay history for trend calculation
         delayHistory.addLast(pos.getDelaySeconds());
         while (delayHistory.size() > historySize) {
             delayHistory.removeFirst();
         }
 
+        // Track stop duration state
         if (isStopped && stoppedSinceMs == null) {
             stoppedSinceMs = pos.getEventTimeMs();
         } else if (!isStopped) {
             stoppedSinceMs = null;
         }
 
+        // Track door status duration
         if (pos.isDoorOpen() && doorOpenSinceMs == null) {
             doorOpenSinceMs = pos.getEventTimeMs();
         } else if (!pos.isDoorOpen()) {
             doorOpenSinceMs = null;
         }
 
+        // Update core metrics
         this.lastLatitude = pos.getLatitude();
         this.lastLongitude = pos.getLongitude();
         this.lastEventTimeMs = pos.getEventTimeMs();
@@ -71,7 +75,6 @@ public class VehicleState implements Serializable {
     }
 
     public double getSpeedTrend(double currentSpeed) {
-        // Simple delta calculation
         return currentSpeed - lastSpeedMs;
     }
 
@@ -79,7 +82,7 @@ public class VehicleState implements Serializable {
         return (stoppedSinceMs == null) ? 0 : (currentTimeMs - stoppedSinceMs);
     }
 
-    public boolean hasStopChanged(Integer currentStopId) {
+    public boolean hasStopChanged(String currentStopId) {
         if (currentStopId == null || lastStopId == null) return false;
         return !currentStopId.equals(lastStopId);
     }
@@ -88,8 +91,10 @@ public class VehicleState implements Serializable {
         return lastEventTimeMs == 0;
     }
 
+    // --- Getters ---
     public double getLastLatitude() { return lastLatitude; }
     public double getLastLongitude() { return lastLongitude; }
     public long getLastEventTimeMs() { return lastEventTimeMs; }
     public double getLastSpeedMs() { return lastSpeedMs; }
+    public String getLastStopId() { return lastStopId; }
 }
