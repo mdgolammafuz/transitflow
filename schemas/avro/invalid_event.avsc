@@ -2,7 +2,7 @@
   "type": "record",
   "name": "InvalidEvent",
   "namespace": "fi.hsl.transit",
-  "doc": "Invalid event sent to dead letter queue",
+  "doc": "Invalid event sent to dead letter queue - UTC Aligned",
   "fields": [
     {
       "name": "raw_payload",
@@ -17,8 +17,7 @@
     {
       "name": "error_field",
       "type": ["null", "string"],
-      "default": null,
-      "doc": "Field that caused the error"
+      "default": null
     },
     {
       "name": "received_at",
@@ -26,13 +25,12 @@
         "type": "long",
         "logicalType": "timestamp-millis"
       },
-      "doc": "When the invalid message was received"
+      "doc": "Forced UTC receipt timestamp"
     },
     {
       "name": "topic",
       "type": ["null", "string"],
-      "default": null,
-      "doc": "Source MQTT topic"
+      "default": null
     }
   ]
 }

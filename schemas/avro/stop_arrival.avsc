@@ -2,10 +2,10 @@
   "type": "record",
   "name": "StopArrival",
   "namespace": "fi.transitflow",
-  "doc": "Stop arrival event - used as ML training label",
+  "doc": "Stop arrival event - Hardened for ML Training Labels",
   "fields": [
-    {"name": "vehicle_id", "type": "int"},
-    {"name": "stop_id", "type": "int"},
+    {"name": "vehicle_id", "type": "string"},
+    {"name": "stop_id", "type": "string", "doc": "Must be string to join with GTFS/Metadata"},
     {"name": "line_id", "type": "string"},
     {"name": "direction_id", "type": "int"},
     {"name": "arrival_time", "type": {"type": "long", "logicalType": "timestamp-millis"}},
