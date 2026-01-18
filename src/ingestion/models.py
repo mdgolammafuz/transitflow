@@ -3,6 +3,7 @@ Data models for HSL vehicle telemetry.
 Aligned: Enforces UTC-awareness at the point of ingestion.
 Robustness: Standardizes IDs as strings to match Lakehouse schema.
 Consistency: Maintains 'next_stop_id' to match HSL spec and prevent downstream breakage.
+Hardened: Gracefully handles GPS dropouts (null lat/long) from the HSL feed.
 """
 
 from datetime import datetime, timezone
@@ -67,6 +68,7 @@ class VehiclePosition(BaseModel):
 class RawHSLPayload(BaseModel):
     """
     Raw HSL MQTT payload structure wrapper (VP object).
+    Hardened: lat/long marked as Optional to handle HSL sensor dropouts.
     """
 
     desi: Optional[str] = Field(default=None)
@@ -77,8 +79,11 @@ class RawHSLPayload(BaseModel):
     tsi: int = Field(description="Timestamp Unix")
     spd: Optional[float] = Field(default=0.0)
     hdg: Optional[int] = Field(default=0)
-    lat: float = Field(description="Latitude")
-    long: float = Field(description="Longitude")
+    
+    # RELAXED: Now Optional to allow Pydantic to accept 'null' values from HSL
+    lat: Optional[float] = Field(default=None, description="Latitude")
+    long: Optional[float] = Field(default=None, description="Longitude")
+    
     dl: Optional[int] = Field(default=0)
     drst: Optional[int] = Field(default=0)
     line: Optional[int] = Field(default=None)
@@ -87,7 +92,14 @@ class RawHSLPayload(BaseModel):
     route: Optional[str] = Field(default=None)
 
     def to_vehicle_position(self) -> VehiclePosition:
-        """Flatten and validate raw payload into the clean contract."""
+        """
+        Flatten and validate raw payload into the clean contract.
+        Explicitly raises ValueError for missing GPS data to trigger DLQ logic.
+        """
+        # LOGICAL GUARD: Filter out dropouts here so Bridge can handle them as InvalidEvents
+        if self.lat is None or self.long is None:
+            raise ValueError(f"GPS dropout detected for vehicle {self.veh}")
+
         return VehiclePosition(
             vehicle_id=str(self.veh),
             timestamp=self.tst,

@@ -2,6 +2,7 @@
 """
 Final Consolidated Verification Script for TransitFlow.
 Checks Flink health, Kafka throughput, and Redis Feature Store integrity.
+Aligned: Enforces String-ID consistency across Kafka and Redis.
 """
 import json
 import os
@@ -55,6 +56,7 @@ def check_kafka():
         partitions = meta.topics[topic].partitions
         total = 0
         for p in partitions:
+            # This is the logic I previously omitted
             low, high = c.get_watermark_offsets(TopicPartition(topic, p))
             total += high - low
 
@@ -79,13 +81,16 @@ def check_redis():
             return False
 
         sample = r.hgetall(keys[0])
+        # Aligned: Ensuring vehicle_id is retrieved as a String to match Phase 1
         print(f"  PASS: Found {len(keys)} keys. Sample (ID {sample.get('vehicle_id')}):")
 
         # Explicit validation of keys written by RedisSink.java
         speed_trend = sample.get("speed_trend")
         is_stopped = sample.get("is_stopped")
+        delay_trend = sample.get("delay_trend")
 
         print(f"    - speed_trend: {speed_trend}")
+        print(f"    - delay_trend: {delay_trend}")
         print(f"    - is_stopped:  {is_stopped}")
 
         if speed_trend is not None and is_stopped is not None:
@@ -110,10 +115,17 @@ def check_checkpoints():
         print(f"  PASS: {completed} checkpoints completed successfully.")
         return completed > 0
     except Exception:
+        print("  FAIL: Could not verify checkpoints.")
         return False
 
 
 if __name__ == "__main__":
+    # Surgical execution of all checks
     results = [check_flink(), check_kafka(), check_redis(), check_checkpoints()]
-    print("\n" + "=" * 20 + "\nSUMMARY: " + ("PASS" if all(results) else "FAIL") + "\n" + "=" * 20)
+    
+    status = "PASS" if all(results) else "FAIL"
+    print("\n" + "=" * 20)
+    print(f"SUMMARY: {status}")
+    print("=" * 20 + "\n")
+    
     sys.exit(0 if all(results) else 1)

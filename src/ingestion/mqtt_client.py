@@ -88,6 +88,7 @@ class HSLMQTTClient:
     def _on_message(self, client, userdata, msg):
         """
         Ingest raw bytes, validate against contract, and calculate ingest-lag.
+        Cleaned: Handles GPS dropouts without noisy stack traces.
         """
         receive_time = time.time()
         self.metrics.record_received()
@@ -113,7 +114,6 @@ class HSLMQTTClient:
             self.metrics.record_validated()
 
             # Record Ingest Latency (How 'old' is the data when we touch it?)
-            # Aligned: position.timestamp is forced UTC via pydantic validator
             event_time = position.timestamp.timestamp()
             latency = receive_time - event_time
             if latency > 0:
@@ -131,8 +131,15 @@ class HSLMQTTClient:
             self._send_to_dlq(msg.payload.decode("utf-8", errors="replace"), str(e), msg.topic)
 
         except Exception as e:
-            self.metrics.record_invalid(reason="runtime_error")
-            logger.exception("Internal Bridge Error: %s", str(e))
+            # Check if this is a known data quality issue (GPS Dropout)
+            if "GPS dropout detected" in str(e):
+                self.metrics.record_invalid(reason="gps_dropout")
+                logger.warning("Data Quality Issue: %s", str(e))
+            else:
+                self.metrics.record_invalid(reason="runtime_error")
+                logger.exception("Internal Bridge Error: %s", str(e))
+            
+            # Still route to DLQ so we don't lose the record of the failure
             self._send_to_dlq(msg.payload.decode("utf-8", errors="replace"), str(e), msg.topic)
 
     def _send_to_dlq(self, raw_payload: str, error: str, topic: str):

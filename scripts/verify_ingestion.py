@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 1 Verification Script
+Verification Script
 
 Run this script locally to verify the ingestion setup works.
 Tests MQTT connection, message parsing, and Kafka production.
