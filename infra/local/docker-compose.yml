@@ -26,7 +26,7 @@ services:
       - --node-id 0
       - --check=false
       - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://127.0.0.1:9092
       - --schema-registry-addr 0.0.0.0:8081
     ports:
       - "9092:9092"
@@ -54,6 +54,7 @@ services:
         condition: service_healthy
 
   # --- Stream Processing (Flink) ---
+  
   flink-jobmanager:
     image: flink:1.18.1-java11
     container_name: flink-jobmanager
@@ -67,6 +68,11 @@ services:
       "
     environment:
       <<: *app-env
+      # Explicit Network Overrides for Internal Docker Communication
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
+      REDIS_HOST: "redis"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      MINIO_ENDPOINT: "http://minio:9000"
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         s3.endpoint: http://minio:9000
@@ -94,6 +100,11 @@ services:
       "
     environment:
       <<: *app-env
+      # Explicit Network Overrides for Internal Docker Communication
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
+      REDIS_HOST: "redis"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      MINIO_ENDPOINT: "http://minio:9000"
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 4
@@ -123,6 +134,11 @@ services:
     user: root
     environment:
       <<: *app-env
+      # Explicit Network Overrides
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
+      REDIS_HOST: "redis"
+      POSTGRES_HOST: "postgres"
+      MINIO_ENDPOINT: "http://minio:9000"
       SPARK_MODE: master
       PYSPARK_PYTHON: python3
       PYTHONPATH: /opt/spark/jobs
@@ -150,9 +166,14 @@ services:
     user: root
     environment:
       <<: *app-env
+      # Explicit Network Overrides
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
+      REDIS_HOST: "redis"
+      POSTGRES_HOST: "postgres"
+      MINIO_ENDPOINT: "http://minio:9000"
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 2G  # Increased to prevent GC hangs
+      SPARK_WORKER_MEMORY: 2G
       PYSPARK_PYTHON: python3
       PYTHONPATH: /opt/spark/jobs
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -201,7 +222,9 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc mb myminio/transitflow-lakehouse --ignore-existing;
+      mc mb myminio/flink-checkpoints --ignore-existing;
       mc policy set public myminio/transitflow-lakehouse;
+      mc policy set public myminio/flink-checkpoints;
       exit 0;
       "
 
