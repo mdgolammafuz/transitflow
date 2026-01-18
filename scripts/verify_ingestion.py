@@ -144,7 +144,7 @@ def test_message_parsing():
             pos = raw.to_vehicle_position()
 
             # Verify key fields
-            assert pos.vehicle_id > 0
+            assert len(pos.vehicle_id) > 0
             assert 59.0 < pos.latitude < 61.0
             assert 23.0 < pos.longitude < 26.0
             assert pos.event_time_ms > 0
