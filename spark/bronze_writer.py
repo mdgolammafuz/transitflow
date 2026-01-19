@@ -2,6 +2,8 @@
 Bronze Writer: Kafka → Delta Lake (Streaming)
 Pattern: Raw Data is Immutable
 Pattern: Idempotent Operations (Exactly-once via Checkpointing)
+Aligned: Forces UTC for consistent landing partitions and type-safe IDs.
+Professional: Optimized for OCI/Cron by ensuring stable date partitioning.
 """
 
 import argparse
@@ -25,9 +27,10 @@ from spark.config import create_spark_session, load_config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BronzeWriter")
 
+# Schema Alignment: next_stop_id and vehicle_id as String for join stability
 ENRICHED_SCHEMA = StructType(
     [
-        StructField("vehicle_id", IntegerType(), False),
+        StructField("vehicle_id", StringType(), False),
         StructField("timestamp", StringType(), True),
         StructField("event_time_ms", LongType(), True),
         StructField("latitude", DoubleType(), True),
@@ -39,7 +42,7 @@ ENRICHED_SCHEMA = StructType(
         StructField("line_id", StringType(), True),
         StructField("direction_id", IntegerType(), True),
         StructField("operator_id", IntegerType(), True),
-        StructField("next_stop_id", IntegerType(), True),
+        StructField("next_stop_id", StringType(), True),
         StructField("delay_trend", DoubleType(), True),
         StructField("speed_trend", DoubleType(), True),
         StructField("distance_since_last_m", DoubleType(), True),
@@ -52,8 +55,8 @@ ENRICHED_SCHEMA = StructType(
 
 STOP_EVENTS_SCHEMA = StructType(
     [
-        StructField("vehicle_id", IntegerType(), False),
-        StructField("stop_id", IntegerType(), True),
+        StructField("vehicle_id", StringType(), False),
+        StructField("stop_id", StringType(), True),
         StructField("line_id", StringType(), True),
         StructField("direction_id", IntegerType(), True),
         StructField("arrival_time", LongType(), True),
@@ -77,6 +80,7 @@ def write_bronze_stream(
 ):
     logger.info(f"Initializing stream: {table_name}")
 
+    # Read from Kafka with earliest offsets for full historical capture
     kafka_df = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", kafka_servers)
@@ -100,9 +104,12 @@ def write_bronze_stream(
             "kafka_timestamp",
             current_timestamp().alias("ingestion_time"),
         )
+        # Partitioning by date ensures efficient dbt and Spark Batch reads
+        # Professional: Explicitly cast to date for 'YYYY-MM-DD' folder structure
         .withColumn("date", to_date(col("kafka_timestamp")))
     )
 
+    # Write to Delta Lake with 10s micro-batch triggers
     return (
         parsed_df.writeStream.format("delta")
         .outputMode("append")
@@ -154,7 +161,7 @@ def main():
             )
         )
 
-    logger.info("Streams active. Waiting for termination...")
+    logger.info(f"Streams active for {len(queries)} tables. Monitoring Kafka...")
     spark.streams.awaitAnyTermination()
 
 
