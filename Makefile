@@ -8,6 +8,8 @@
 # --- Configuration ---
 # Loads credentials and service names from infra/local/.env
 -include infra/local/.env
+# Aligned: Target date for manual verification and OCI Cron context
+DATE ?= 2026-01-18
 
 # Local connectivity constants
 REGISTRY_URL := $(if $(SCHEMA_REGISTRY_URL),$(SCHEMA_REGISTRY_URL),http://localhost:8081)
@@ -45,6 +47,7 @@ DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
 # Robust: Explicitly overrides HOST environment variables for the internal Docker network context.
 # This prevents 'Connection Refused' by ensuring Spark looks for 'minio' and 'postgres' containers, not itself.
 SPARK_SUBMIT := docker exec -it --env-file infra/local/.env \
+  -e KAFKA_BOOTSTRAP_SERVERS=redpanda:29092 \
   -e POSTGRES_HOST=postgres \
   -e MINIO_ENDPOINT=http://minio:9000 \
   spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
@@ -157,7 +160,7 @@ spark-bronze:
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all
 
 spark-silver:
-	$(SPARK_SUBMIT) /opt/spark/jobs/spark/silver_transform.py
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/silver_transform.py --date $(DATE)
 
 # Methodical: Ensures metadata is initialized before attempting gold aggregation
 # Robust: Explicitly sets MinIO endpoint to the container address for Spark context
@@ -177,7 +180,7 @@ metadata-init:
 # Optimized: Uses master local[*] with explicit S3A configs to bypass cluster auth issues
 # Methodical: Depends on metadata-init to prevent hangs on missing paths
 spark-gold: metadata-init
-	@echo "Running Gold Aggregations..."
+	@echo "Running Gold Aggregations for $(DATE) ..."
 	$(SPARK_SUBMIT) \
 		--master "local[*]" \
 		--conf spark.driver.host=localhost \
@@ -187,10 +190,13 @@ spark-gold: metadata-init
 		--conf spark.hadoop.fs.s3a.path.style.access=true \
 		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
 		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
-		/opt/spark/jobs/spark/gold_aggregation.py
+		/opt/spark/jobs/spark/gold_aggregation.py --date $(DATE)
 
 spark-reconcile:
-	$(SPARK_SUBMIT) /opt/spark/jobs/spark/reconciliation.py --save
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/reconciliation.py --date $(DATE) --save
+
+spark-maintenance:
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/maintenance.py --date $(DATE) --action all
 
 # --- Data Contracts & Warehouse (dbt) ---
 schema-register:
@@ -224,7 +230,7 @@ dbt-docs:
 	@echo "Serving documentation at http://localhost:8085"
 	$(DBT) docs serve --port 8085
 
-# --- Feature Store & ML Serving (Phase 5 & 6) ---
+# --- Feature Store & ML Serving ---
 feature-api:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 feature_store/api.py
 
@@ -263,13 +269,14 @@ serving-test:
 
 # --- Orchestrated Verification ---
 verify-pipeline:
-	@echo "Running end-to-end integrity suite..."
-	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_pipeline.py --check-all
+	@echo "Verifying integrity for $(DATE)..."
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_lakehouse.py --date $(DATE)
 
 # --- Storage & Lakehouse Utilities ---
 lakehouse-ls:
-	@docker exec -it minio mc alias set myminio http://localhost:9000 minioadmin minioadmin > /dev/null && mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
-
+	@docker exec -it minio /usr/bin/mc alias set myminio http://localhost:9000 $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) > /dev/null
+	@docker exec -it minio /usr/bin/mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
+	
 # --- Maintenance ---
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
