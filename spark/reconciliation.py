@@ -2,12 +2,14 @@
 Reconciliation Job: Data Integrity Audit
 Pattern: Unified Stream/Batch (DE#5)
 Verifies that Bronze and Silver layers are synchronized within acceptable thresholds.
+Aligned: Enforces UTC for date partitioning and audit timestamps.
 """
 
 import argparse
 import logging
+import sys
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pyspark.sql.functions import col
 
@@ -30,7 +32,8 @@ class ReconciliationResult:
     diff_percentage: float
     passed: bool
     threshold_pct: float = 20.0
-    checked_at: str = datetime.now().isoformat()
+    # Aligned: Ensure checked_at is UTC
+    checked_at: str = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self):
         """Convert the result to a dictionary for logging or DB insertion."""
@@ -40,10 +43,10 @@ class ReconciliationResult:
 def get_count(spark, path, date):
     """Safely get count for a specific date partition."""
     try:
-        # Optimization: We only check if it's a valid Delta Table first
         from delta.tables import DeltaTable
 
         if not DeltaTable.isDeltaTable(spark, path):
+            logger.warning(f"Path is not a valid Delta table: {path}")
             return 0
 
         return spark.read.format("delta").load(path).filter(col("date") == date).count()
@@ -55,11 +58,12 @@ def get_count(spark, path, date):
 def save_to_postgres(result: ReconciliationResult, config):
     """
     Persist the audit result to the PostgreSQL database.
-    Ensures DE#5 visibility into pipeline health.
+    Ensures visibility into pipeline health across the stack.
     """
     try:
         import psycopg2
 
+        # Aligned: Using keys defined in spark.config.SparkConfig
         conn = psycopg2.connect(
             host=config.postgres_host,
             port=config.postgres_port,
@@ -102,16 +106,19 @@ def save_to_postgres(result: ReconciliationResult, config):
         conn.close()
         logger.info(f"Successfully saved {result.table_name} audit to Postgres.")
     except Exception as e:
-        logger.error(f"PostgreSQL persistence failed: {e}")
+        logger.error(f"PostgreSQL audit persistence failed: {e}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="TransitFlow Reconciliation Audit")
-    parser.add_argument("--date", type=str, help="YYYY-MM-DD")
+    # Robustness: Make --date mandatory to ensure OCI/Cron stability
+    parser.add_argument("--date", type=str, required=True, help="YYYY-MM-DD")
     parser.add_argument("--save", action="store_true", default=True)
     args = parser.parse_args()
 
-    target_date = args.date if args.date else datetime.now().strftime("%Y-%m-%d")
+    # Principal Logic: No longer defaults to "now" to prevent silent 0-count failures
+    target_date = args.date
+    
     config = load_config()
     spark = create_spark_session("TransitFlow-Reconciliation")
 
@@ -121,11 +128,12 @@ def main():
 
     # 2. Calculate metrics
     diff = abs(b_count - s_count)
+    # Prevent DivisionByZero if Bronze is empty
     diff_pct = (diff / b_count * 100) if b_count > 0 else 0.0
-    threshold = 20.0  # 20% threshold for deduplication/timing drift
+    threshold = 20.0  
     is_passed = diff_pct <= threshold
 
-    # 3. Create result object for consistency
+    # 3. Create result object
     result = ReconciliationResult(
         date=target_date,
         table_name="enriched",
@@ -139,7 +147,7 @@ def main():
 
     # 4. Console Reporting
     print("\n" + "=" * 60)
-    print(f"RECONCILIATION REPORT: {result.date}")
+    print(f"RECONCILIATION REPORT (UTC): {result.date}")
     status = "PASS" if result.passed else "FAIL"
     print(f"Status: {status} (Threshold: {result.threshold_pct}%)")
     print(f"Bronze Count: {result.stream_count:,}")
