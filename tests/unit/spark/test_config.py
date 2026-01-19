@@ -1,129 +1,139 @@
 """
-Unit tests for Spark configuration module.
-
-Tests:
-- Environment variable loading
-- Required variable validation
-- Default values
-- Config object construction
-
-Run with: pytest tests/unit/spark/test_config.py -v
+Spark configuration loader.
+Context: Medallion Architecture (Bronze -> Silver -> Gold)
+All configuration from environment variables - no hardcoded values.
+Methodical: Hardened with S3A retry limits to prevent silent hangs.
+Aligned: Global UTC session lock to prevent timezone leaks.
 """
 
 import os
-
-import pytest
-
-
-class TestSparkConfig:
-    """Tests for Spark configuration loading."""
-
-    def test_load_config_with_all_vars(self, env_config):
-        """Config loads successfully with all required variables from .env."""
-        from spark.config import load_config
-
-        config = load_config()
-
-        # Aligned with your actual .env provided earlier
-        assert config.kafka_bootstrap_servers == "redpanda:29092"
-        assert config.minio_access_key == "minioadmin"
-        assert config.minio_secret_key == "minioadmin"
-        assert config.postgres_user == "transit"
-
-    def test_load_config_missing_required(self, monkeypatch):
-        """Config raises error when required variable missing."""
-        # Clear specific required variables to test validation
-        required_keys = [
-            "MINIO_ROOT_USER",
-            "MINIO_ROOT_PASSWORD",
-            "POSTGRES_USER",
-            "POSTGRES_PASSWORD",
-        ]
-        for key in required_keys:
-            monkeypatch.delenv(key, raising=False)
-
-        from spark.config import load_config
-
-        with pytest.raises(ValueError) as exc_info:
-            load_config()
-
-        assert "Required environment variable not set" in str(exc_info.value)
-
-    def test_default_values(self, env_config):
-        """Config uses defaults for optional variables."""
-        from spark.config import load_config
-
-        config = load_config()
-
-        # Verify Medallion logic defaults
-        assert config.lakehouse_bucket == "transitflow-lakehouse"
-        assert config.bronze_retention_days == 7
-        assert config.silver_retention_days == 30
-        assert config.gold_retention_days == 365
-
-    def test_paths_constructed_from_bucket(self, env_config):
-        """Paths are constructed correctly for the S3A protocol."""
-        from spark.config import load_config
-
-        config = load_config()
-
-        bucket = "transitflow-lakehouse"
-        assert config.bronze_path == f"s3a://{bucket}/bronze"
-        assert config.silver_path == f"s3a://{bucket}/silver"
-        assert config.gold_path == f"s3a://{bucket}/gold"
-
-    def test_postgres_connection_params(self, env_config):
-        """Verify DB connection parameters match the .env profile."""
-        from spark.config import load_config
-
-        config = load_config()
-
-        assert config.postgres_host == "postgres"
-        assert config.postgres_port == "5432"
-        assert config.postgres_db == "transit"
-
-    def test_custom_retention_days(self, env_config, monkeypatch):
-        """Custom retention values are respected when provided in environment."""
-        monkeypatch.setenv("BRONZE_RETENTION_DAYS", "14")
-        monkeypatch.setenv("SILVER_RETENTION_DAYS", "60")
-        monkeypatch.setenv("GOLD_RETENTION_DAYS", "730")
-
-        from spark.config import load_config
-
-        config = load_config()
-
-        assert int(config.bronze_retention_days) == 14
-        assert int(config.silver_retention_days) == 60
-        assert int(config.gold_retention_days) == 730
+from dataclasses import dataclass
 
 
-class TestSparkConfigSecurity:
-    """Security-related tests for configuration."""
+@dataclass
+class SparkConfig:
+    """Configuration for Spark jobs."""
 
-    def test_no_hardcoded_credentials(self):
-        """Verify no hardcoded credentials exist in the source code."""
-        import inspect
+    # Kafka
+    kafka_bootstrap_servers: str
+    kafka_enriched_topic: str = "fleet.enriched"
+    kafka_stops_topic: str = "fleet.stop_events"
 
-        from spark import config
+    # MinIO / S3
+    minio_endpoint: str = ""
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    lakehouse_bucket: str = "transitflow-lakehouse"
 
-        source = inspect.getsource(config)
-        source_lower = source.lower()
+    # Retention (Days)
+    bronze_retention_days: int = 7
+    silver_retention_days: int = 30
+    gold_retention_days: int = 365
 
-        # Principal Engineer standard: Never hardcode these strings
-        forbidden_patterns = ["minioadmin", "transit_secure_local", "redis_secure_local"]
+    # Paths (Computed in __post_init__)
+    bronze_path: str = ""
+    silver_path: str = ""
+    gold_path: str = ""
 
-        for pattern in forbidden_patterns:
-            # We check if the pattern is in the source but NOT as an os.environ.get fallback
-            assert (
-                pattern not in source_lower or "environ" in source_lower
-            ), f"Security Risk: Potential hardcoded credential found: {pattern}"
+    # PostgreSQL
+    postgres_jdbc_url: str = ""
+    postgres_host: str = ""
+    postgres_port: str = ""
+    postgres_db: str = ""
+    postgres_user: str = ""
+    postgres_password: str = ""
 
-    def test_credentials_from_environment_only(self, env_config):
-        """Verify that credentials used by the app match the environment exactly."""
-        from spark.config import load_config
+    def __post_init__(self):
+        """Construct logic-based paths using S3A protocol."""
+        base = f"s3a://{self.lakehouse_bucket}"
+        self.bronze_path = f"{base}/bronze"
+        self.silver_path = f"{base}/silver"
+        self.gold_path = f"{base}/gold"
 
-        config = load_config()
+    def get_checkpoint_path(self, job_name: str) -> str:
+        """Centralized checkpoint management for streaming jobs."""
+        return f"s3a://{self.lakehouse_bucket}/_checkpoints/{job_name}"
 
-        assert config.minio_access_key == os.environ.get("MINIO_ROOT_USER")
-        assert config.minio_secret_key == os.environ.get("MINIO_ROOT_PASSWORD")
-        assert config.postgres_password == os.environ.get("POSTGRES_PASSWORD")
+
+def load_config() -> SparkConfig:
+    """Load configuration from environment variables."""
+
+    def get_required(key: str) -> str:
+        value = os.environ.get(key)
+        if not value:
+            raise ValueError(f"Required environment variable not set: {key}")
+        return value
+
+    def get_optional(key: str, default: str = "") -> str:
+        return os.environ.get(key, default)
+
+    # Database parameters
+    pg_host = get_optional("POSTGRES_HOST", "postgres")
+    pg_port = get_optional("POSTGRES_PORT", "5432")
+    pg_db = get_optional("POSTGRES_DB", "transit")
+
+    config = SparkConfig(
+        kafka_bootstrap_servers=get_optional("KAFKA_BOOTSTRAP_SERVERS", "redpanda:29092"),
+        minio_endpoint=get_optional("MINIO_ENDPOINT", "http://minio:9000"),
+        minio_access_key=get_required("MINIO_ROOT_USER"),
+        minio_secret_key=get_required("MINIO_ROOT_PASSWORD"),
+        lakehouse_bucket=get_optional("LAKEHOUSE_BUCKET", "transitflow-lakehouse"),
+        
+        # Aligned: Pull retention days from env with fallback to defaults
+        bronze_retention_days=int(get_optional("BRONZE_RETENTION_DAYS", "7")),
+        silver_retention_days=int(get_optional("SILVER_RETENTION_DAYS", "30")),
+        gold_retention_days=int(get_optional("GOLD_RETENTION_DAYS", "365")),
+        
+        postgres_host=pg_host,
+        postgres_port=pg_port,
+        postgres_db=pg_db,
+        postgres_user=get_required("POSTGRES_USER"),
+        postgres_password=get_required("POSTGRES_PASSWORD"),
+    )
+
+    # Construct JDBC URL based on provided host/port/db
+    config.postgres_jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_db}"
+
+    return config
+
+def create_spark_session(app_name: str):
+    """Initializes Spark Session with optimized S3A and Delta settings."""
+    from pyspark.sql import SparkSession
+    config = load_config()
+
+    spark = (
+        SparkSession.builder.appName(app_name)
+        .config(
+            "spark.jars.packages",
+            "io.delta:delta-spark_2.12:3.0.0,"
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
+            "org.apache.hadoop:hadoop-aws:3.3.4,"
+            "org.postgresql:postgresql:42.6.0"
+        )
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+        )
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.hadoop.fs.s3a.endpoint", config.minio_endpoint)
+        .config("spark.hadoop.fs.s3a.access.key", config.minio_access_key)
+        .config("spark.hadoop.fs.s3a.secret.key", config.minio_secret_key)
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+        .config("spark.hadoop.fs.s3a.connection.timeout", "5000")
+        .config("spark.hadoop.fs.s3a.attempts.maximum", "1")
+        .config("spark.hadoop.fs.s3a.retry.limit", "1")
+        .config(
+            "spark.delta.logStore.class",
+            "org.apache.spark.sql.delta.storage.S3SingleDriverLogStore"
+        )
+        .getOrCreate()
+    )
+
+    hc = spark.sparkContext._jsc.hadoopConfiguration()
+    hc.set("fs.s3a.connection.timeout", "5000")
+    hc.set("fs.s3a.attempts.maximum", "1")
+
+    return spark

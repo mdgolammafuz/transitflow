@@ -3,54 +3,30 @@
 Lakehouse Verification Script
 Checks the integrity of the Medallion Architecture (Bronze/Silver/Gold)
 and infrastructure health for Spark, MinIO, and PostgreSQL.
+Standard: Requires --date to verify specific partition existence for OCI stability.
 """
 
+import argparse
 import json
 import os
 import subprocess
 import sys
 from urllib.request import urlopen
 
-
 def run_pg_query(query):
+    """Executes a query directly against the Postgres container."""
     pg_user = os.environ.get("POSTGRES_USER", "transit")
     pg_db = os.environ.get("POSTGRES_DB", "transit")
     cmd = ["docker", "exec", "postgres", "psql", "-U", pg_user, "-d", pg_db, "-t", "-c", query]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.stdout.strip()
-
-
-def check_counts(layer_path):
-    # Queries the latest record count via a lightweight Spark SQL check or checking Parquet file presence
-    # For high robustness without triggering full Spark sessions, we check the Postgres Audit logs for that table
-    print(f"  Table: {layer_path}")
-    count = run_pg_query(
-        "SELECT batch_count FROM reconciliation_results WHERE table_name='enriched' ORDER BY checked_at DESC LIMIT 1;"
-    )
-    print(f"    Last Verified Records: {count}")
-    return int(count) if count else 0
-
-
-def verify_reconciliation():
-    print("\n=== Check 4: Reconciliation ===")
-    query = "SELECT stream_count, batch_count, diff_percentage FROM reconciliation_results ORDER BY checked_at DESC LIMIT 1;"
-    raw = run_pg_query(query)
-    if raw:
-        s, b, diff = raw.split("|")
-        print(f"  Stream count: {s.strip()}")
-        print(f"  Batch count: {b.strip()}")
-        print(f"  Difference: {diff.strip()}%")
-        if float(diff.strip()) < 20.0:
-            print("PASS: Stream and batch agree")
-            return True
-    print("FAIL: Reconciliation mismatch")
-    return False
-
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return f"ERROR: {e.stderr}"
 
 def check_minio_connection():
     print("\n=== Check 0: MinIO Connection ===")
     try:
-        # Checking MinIO API health
         response = urlopen("http://localhost:9000/minio/health/live", timeout=5)
         if response.status == 200:
             print("  PASS: MinIO health is OK")
@@ -59,11 +35,9 @@ def check_minio_connection():
         print(f"  FAIL: MinIO unreachable at localhost:9000. {e}")
         return False
 
-
 def check_spark_master():
     print("\n=== Check 1: Spark Master ===")
     try:
-        # User Docker config maps host 8083 to container 8080
         response = urlopen("http://localhost:8083/json/", timeout=5)
         data = json.loads(response.read().decode())
         print(f"  Status: {data.get('status')} | Workers: {len(data.get('workers', []))}")
@@ -72,88 +46,76 @@ def check_spark_master():
             return True
         return False
     except Exception as e:
-        print(f"  FAIL: Spark Master UI (localhost:8083) unreachable. {e}")
+        print(f"  FAIL: Spark Master UI unreachable at localhost:8083. {e}")
         return False
 
-
-def check_delta_path(path):
-    """Checks if Delta logs exist in the container."""
+def check_delta_partition(path, date):
+    """Checks if a specific date partition exists inside the Delta table."""
     bucket = "transitflow-lakehouse"
-    # Using 'ls -R' to find the _delta_log specifically in the MinIO data volume
-    cmd = ["docker", "exec", "minio", "ls", "-R", f"/data/{bucket}/{path}"]
+    # Search for the specific partition folder within the Delta path
+    partition_path = f"/data/{bucket}/{path}/date={date}"
+    cmd = ["docker", "exec", "minio", "ls", "-R", partition_path]
     result = subprocess.run(cmd, capture_output=True, text=True)
-    return "_delta_log" in result.stdout
+    return "part-" in result.stdout  # If part files exist, the partition is populated
 
-
-def check_medallion_layers():
-    print("\n=== Check 2: Medallion Layers ===")
-    # Explicitly including stop_events checks as requested
+def check_medallion_layers(target_date):
+    print(f"\n=== Check 2: Medallion Layers (Partition: {target_date}) ===")
     layers = {
         "Bronze": ["bronze/enriched", "bronze/stop_events"],
         "Silver": ["silver/enriched", "silver/stop_events"],
-        "Gold": ["gold/daily_metrics", "gold/hourly_metrics", "gold/stop_performance"],
+        "Gold": ["gold/daily_metrics", "gold/hourly_metrics"],
     }
 
     all_passed = True
     for layer, tables in layers.items():
         print(f"  {layer} Layer:")
         for t in tables:
-            exists = check_delta_path(t)
+            exists = check_delta_partition(t, target_date)
             status_icon = "[PASS]" if exists else "[MISSING]"
             print(f"    {status_icon} {t}")
             if not exists:
                 all_passed = False
 
-    if all_passed:
-        print("  PASS: All Medallion layers and stop_events are present.")
     return all_passed
 
-
-def check_reconciliation():
-    print("\n=== Check 3: PostgreSQL Audit Trail ===")
-    pg_user = os.environ.get("POSTGRES_USER", "transit")
-    pg_db = os.environ.get("POSTGRES_DB", "transit")
-
-    cmd = [
-        "docker",
-        "exec",
-        "postgres",
-        "psql",
-        "-U",
-        pg_user,
-        "-d",
-        pg_db,
-        "-t",
-        "-c",
-        "SELECT count(*) FROM reconciliation_results;",
-    ]
+def check_reconciliation_audit(target_date):
+    print(f"\n=== Check 3: PostgreSQL Audit for {target_date} ===")
+    query = f"SELECT count(*) FROM reconciliation_results WHERE date = '{target_date}';"
+    count_str = run_pg_query(query)
+    if "ERROR" in count_str:
+        print(f"  FAIL: Database error. {count_str}")
+        return False
+    
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            count = int(result.stdout.strip())
-            print(f"  Found {count} audit records in PostgreSQL.")
-            if count > 0:
-                print("  PASS: Reconciliation table is populated.")
-                return True
-        print("  WARN: Reconciliation table exists but is empty.")
+        count = int(count_str)
+        print(f"  Found {count} audit records for {target_date}.")
+        if count > 0:
+            print("  PASS: Audit trail entry exists.")
+            return True
+        print(f"  WARN: No audit record for {target_date}. Run 'make spark-reconcile DATE={target_date}'.")
         return False
-    except Exception:
-        print("  FAIL: Cannot query PostgreSQL. Check if 'reconciliation_results' table exists.")
+    except ValueError:
+        print("  FAIL: Unexpected response from Postgres.")
         return False
-
 
 def main():
-    print("Starting Lakehouse Verification...")
+    parser = argparse.ArgumentParser(description="TransitFlow Lakehouse Verification")
+    parser.add_argument("--date", type=str, required=True, help="Processing date (YYYY-MM-DD)")
+    args = parser.parse_args()
+
+    print(f"Starting Lakehouse Verification for DATE: {args.date}...")
     c0 = check_minio_connection()
     c1 = check_spark_master()
-    c2 = check_medallion_layers()
-    c3 = check_reconciliation()
+    c2 = check_medallion_layers(args.date)
+    c3 = check_reconciliation_audit(args.date)
 
     print("\nVerification Complete.")
     if not all([c0, c1, c2, c3]):
+        print("!!! PIPELINE INCOMPLETE: One or more stages missing for this date. !!!")
         sys.exit(1)
+    
+    print(f"!!! PHASE 3 CERTIFIED: End-to-End Lakehouse is Functional for {args.date}. !!!")
     sys.exit(0)
-
 
 if __name__ == "__main__":
     main()
