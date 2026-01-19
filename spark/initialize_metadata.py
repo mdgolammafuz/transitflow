@@ -3,10 +3,12 @@ Metadata Initialization: Postgres (reference.stops) → Gold (Delta Lake)
 Context: Bootstraps Ingredient B (Stop Coordinates) for Feature Engineering.
 Methodical: Strictly targets the dbt-aliased 'reference.stops' table.
 Robustness: Leverages hardened Spark session to prevent S3A handshake hangs.
+Aligned: Ensures Type Safety for IDs and enforces Primary Key uniqueness.
 """
 
 import sys
 import logging
+from pyspark.sql.functions import col
 from spark.config import create_spark_session, load_config
 
 # Configure logging to match the project standard
@@ -20,7 +22,7 @@ def bootstrap_metadata():
     """Reads stop metadata from Postgres and writes it as a Delta table in the Lakehouse."""
     
     # 1. Initialize Spark and Load Config
-    # create_spark_session now contains the permanent anti-hang circuit breakers
+    # create_spark_session now contains the permanent UTC lock and circuit breakers
     spark = create_spark_session("TransitFlow-MetadataInit")
     config = load_config()
     
@@ -47,18 +49,19 @@ def bootstrap_metadata():
             logger.error(f"Source table {target_table} is empty. Run 'make dbt-seed' first.")
             sys.exit(1)
 
-        # 3. Project only the columns needed for ML Feature Enrichment
+        # 3. Project and Type-Cast columns needed for ML Feature Enrichment
         # Mapping standard GTFS names to our Gold Layer schema
+        # Force stop_id to String to ensure join compatibility with telemetry JSON
         metadata_df = stops_df.select(
-            "stop_id", 
-            "stop_name", 
-            "stop_lat", 
-            "stop_lon"
-        )
+            col("stop_id").cast("string"), 
+            col("stop_name"), 
+            col("stop_lat"), 
+            col("stop_lon")
+        ).dropDuplicates(["stop_id"])
 
         # 4. Write to Gold Layer as Delta (The Lakehouse Bridge)
         # This triggers the S3A handshake with MinIO
-        logger.info(f"Writing metadata to {target_path} as Delta Table...")
+        logger.info(f"Writing {metadata_df.count()} unique stops to {target_path} as Delta Table...")
         metadata_df.write \
             .format("delta") \
             .mode("overwrite") \
