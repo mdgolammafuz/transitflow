@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: stg_enriched
-    description: "Cleaned and typed enriched events from Bronze layer"
+    description: "Cleaned and typed enriched events from Bronze layer (Source of Truth for Telemetry)"
     config:
       contract:
         enforced: true
@@ -12,9 +12,7 @@ models:
       - name: event_time_ms
         data_type: bigint
       - name: event_timestamp
-        data_type: timestamp with time zone
-      - name: event_date
-        data_type: date
+        data_type: timestamp
       - name: latitude
         data_type: double precision
       - name: longitude
@@ -50,18 +48,18 @@ models:
       - name: stopped_duration_ms
         data_type: bigint
       - name: processing_time
-        data_type: timestamp with time zone
+        data_type: timestamp
       - name: kafka_partition
         data_type: integer
       - name: kafka_offset
         data_type: bigint
       - name: ingestion_time
-        data_type: timestamp with time zone
-      - name: partition_date
+        data_type: timestamp
+      - name: date
         data_type: date
 
   - name: stg_stop_events
-    description: "Aggregated stop performance metrics from Spark Gold"
+    description: "Aggregated stop performance metrics from Spark Gold Sink"
     config:
       contract:
         enforced: true
@@ -74,15 +72,15 @@ models:
         data_type: integer
       - name: day_of_week
         data_type: integer
-      - name: sample_count
+      - name: historical_arrival_count
         data_type: bigint
       - name: historical_avg_delay
         data_type: double precision
       - name: avg_dwell_time_ms
         data_type: double precision
-      - name: latitude
+      - name: stop_lat
         data_type: double precision
-      - name: longitude
+      - name: stop_lon
         data_type: double precision
-      - name: ingestion_time
-        data_type: timestamp with time zone
+      - name: staging_time
+        data_type: timestamp

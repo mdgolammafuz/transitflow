@@ -10,3 +10,6 @@ transitflow:
       dbname: "{{ env_var('POSTGRES_DB') }}"
       schema: public
       threads: 4
+      # Forces every dbt connection to use UTC 
+      # regardless of the Postgres host or OCI container settings.
+      ra_options: "-c timezone=UTC"

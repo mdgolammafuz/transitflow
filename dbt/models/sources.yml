@@ -2,28 +2,25 @@ version: 2
 
 sources:
   - name: bronze
-    description: "Raw streaming data from Flink/Kafka"
-    schema: bronze
-    loaded_at_field: ingestion_time
+    description: "Raw telemetry and stop events from Spark Bronze"
+    schema: bronze 
     tables:
       - name: enriched
-        description: "Enriched vehicle telemetry events"
       - name: stop_events
-        description: "Raw stop arrival detections"
 
   - name: raw_lakehouse
-    description: "Aggregated Gold data synced from MinIO by Spark"
-    database: transit
-    schema: public
+    description: "Gold data produced by Spark Sink"
+    database: "{{ env_var('POSTGRES_DB') }}" 
+    schema: public # Matches Spark Sink location
     tables:
       - name: fct_stop_arrivals
-        description: "Aggregated stop performance (Source for Marts)"
-      - name: fct_daily_performance
-        description: "Aggregated daily KPIs (Source for Marts)"
+        description: "Spark Gold Sink for Stop Performance"
+        identifier: fct_stop_arrivals
 
-  - name: reference
-    description: "Static reference data (GTFS)"
-    schema: reference
-    tables:
-      - name: seed_stops
-      - name: seed_lines
+      - name: fct_daily_performance
+        description: "Daily KPIs for analytical reporting"
+        identifier: fct_daily_performance
+        loaded_at_field: ingestion_time 
+        freshness:
+          warn_after: {count: 12, period: hour}
+          error_after: {count: 24, period: hour}

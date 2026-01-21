@@ -1,7 +1,7 @@
 /*
     Dimension: Lines (SCD Type 2)
     Context: Static reference data for Transit Lines.
-    Harden: Ensures type consistency for surrogate keys and SCD dates.
+    Hardening: Aligned with project-level variables and UTC session lock.
 */
 
 {{ config(
@@ -25,12 +25,13 @@ final as (
         cast(line_type as text) as line_type,
         cast(operator_name as text) as operator_name,
         
-        -- SCD Type 2 Metadata
+        -- SCD Type 2 Metadata: Driven by the UTC-locked snapshot
         dbt_valid_from as valid_from,
-        -- Alignment: Using 2099-12-31 to match dim_stops fallback
+        
+        -- Alignment: Use the global var to ensure 'forever' is consistent across layers
         coalesce(
             dbt_valid_to, 
-            cast('2099-12-31' as timestamp)
+            cast('{{ var("scd_end_date") }}' as timestamp)
         ) as valid_to,
         
         -- Flag for the current active version of a line

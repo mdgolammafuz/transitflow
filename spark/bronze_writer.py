@@ -31,7 +31,7 @@ logger = logging.getLogger("BronzeWriter")
 ENRICHED_SCHEMA = StructType(
     [
         StructField("vehicle_id", StringType(), False),
-        StructField("timestamp", StringType(), True),
+        StructField("event_timestamp", StringType(), True),
         StructField("event_time_ms", LongType(), True),
         StructField("latitude", DoubleType(), True),
         StructField("longitude", DoubleType(), True),

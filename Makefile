@@ -44,7 +44,7 @@ DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
 DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
 
 # Spark execution wrapper (Container-based)
-# Robust: Explicitly overrides HOST environment variables for the internal Docker network context.
+# Explicitly overrides HOST environment variables for the internal Docker network context.
 # This prevents 'Connection Refused' by ensuring Spark looks for 'minio' and 'postgres' containers, not itself.
 SPARK_SUBMIT := docker exec -it --env-file infra/local/.env \
   -e KAFKA_BOOTSTRAP_SERVERS=redpanda:29092 \
@@ -156,14 +156,35 @@ flink-submit:
 	docker exec -it flink-jobmanager flink run -d /opt/flink/jobs/transitflow-flink-1.0.0.jar
 
 # --- Delta Lake Processing (Spark) ---
+
+# 1. Kafka to MinIO (Continuous Delta Lake Stream)
 spark-bronze:
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all
 
-spark-silver:
+# 2. MinIO to Postgres (The Bridge)
+# Methodical: Pulls the records from Delta Lake into Postgres Bronze tables.
+# Optimized: Uses master local[*] and explicit S3A configs to ensure high-speed JDBC transfer.
+spark-sync:
+	@echo "Syncing Lakehouse (MinIO) to Postgres Bronze Layer for $(DATE)..."
+	$(SPARK_SUBMIT) \
+		--master "local[*]" \
+		--conf spark.driver.host=localhost \
+		--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+		--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
+		--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
+		--conf spark.hadoop.fs.s3a.path.style.access=true \
+		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+		/opt/spark/jobs/spark/sync_bronze_to_postgres.py --date $(DATE)
+
+# 3. Bronze to Silver (Cleaning)
+# Methodical: Now depends on spark-sync to ensure Postgres is hydrated before processing.
+spark-silver: spark-sync
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/silver_transform.py --date $(DATE)
 
+# 4. Initialize Metadata (Coordinates)
 # Methodical: Ensures metadata is initialized before attempting gold aggregation
-# Robust: Explicitly sets MinIO endpoint to the container address for Spark context
+# Explicitly sets MinIO endpoint to the container address for Spark context
 metadata-init:
 	@echo "Initializing Gold Metadata Layer from Postgres..."
 	$(SPARK_SUBMIT) \
@@ -177,6 +198,7 @@ metadata-init:
 		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
 		/opt/spark/jobs/spark/initialize_metadata.py
 
+# 5. Silver to Gold (Aggregation)
 # Optimized: Uses master local[*] with explicit S3A configs to bypass cluster auth issues
 # Methodical: Depends on metadata-init to prevent hangs on missing paths
 spark-gold: metadata-init
@@ -199,6 +221,27 @@ spark-maintenance:
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/maintenance.py --date $(DATE) --action all
 
 # --- Data Contracts & Warehouse (dbt) ---
+
+# Variable for date-partitioned runs (e.g., make dbt-run DATE=2026-01-18)
+# Defaults to today if not provided
+DATE ?= $(shell date +%Y-%m-%d)
+
+# Common environment variables for all dbt commands to ensure connectivity
+DBT_ENV = cd dbt && DBT_PROFILES_DIR=. \
+	POSTGRES_USER=$(POSTGRES_USER) \
+	POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	POSTGRES_DB=$(POSTGRES_DB) \
+	POSTGRES_HOST=$(POSTGRES_HOST) \
+	POSTGRES_PORT=$(POSTGRES_PORT) \
+	POSTGRES_SCHEMA=$(POSTGRES_SCHEMA) \
+	REDIS_HOST=$(REDIS_HOST) \
+	REDIS_PORT=$(REDIS_PORT) \
+	REDIS_PASSWORD=$(REDIS_PASSWORD) \
+	SCHEMA_REGISTRY_URL=$(SCHEMA_REGISTRY_URL) \
+	FEATURE_API_URL=$(FEATURE_API_URL) \
+	SERVING_API_URL=$(SERVING_API_URL) \
+	OTLP_ENDPOINT=$(OTLP_ENDPOINT)
+
 schema-register:
 	@echo "Registering Avro definitions..."
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/register_schemas.py
@@ -211,25 +254,30 @@ schema-list:
 	@curl -s $(REGISTRY_URL)/subjects | python3 -m json.tool
 
 dbt-deps:
-	$(DBT) deps
+	$(DBT_ENV) dbt deps
 
 dbt-seed:
-	$(DBT) seed
+	$(DBT_ENV) dbt seed
 
 dbt-snapshot:
-	$(DBT) snapshot
+	$(DBT_ENV) dbt snapshot
 
+# Professional Run: Injecting the target_date into the dbt variable context
 dbt-run:
-	$(DBT) run
+	$(DBT_ENV) dbt run --vars "{'target_date': '$(DATE)'}"
+
+# Full Refresh: Used when logic in Discovery Dimensions (dim_stops) changes
+dbt-refresh:
+	$(DBT_ENV) dbt run --full-refresh --vars "{'target_date': '$(DATE)'}"
 
 dbt-test:
-	$(DBT) test
+	$(DBT_ENV) dbt test --vars "{'target_date': '$(DATE)'}"
 
 dbt-docs:
-	$(DBT) docs generate
+	$(DBT_ENV) dbt docs generate
 	@echo "Serving documentation at http://localhost:8085"
-	$(DBT) docs serve --port 8085
-
+	$(DBT_ENV) dbt docs serve --port 8085
+	
 # --- Feature Store & ML Serving ---
 feature-api:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 feature_store/api.py

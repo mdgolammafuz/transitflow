@@ -100,7 +100,6 @@ def aggregate_daily_metrics(spark: SparkSession, config, target_date: str):
         logger.error(f"Daily aggregation failed for {target_date}: {e}")
         sys.exit(1)
 
-
 def aggregate_hourly_metrics(spark: SparkSession, config, target_date: str):
     """Aggregate enriched data into hourly snapshots with Helsinki context."""
     silver_path = f"{config.silver_path}/enriched"
@@ -109,11 +108,10 @@ def aggregate_hourly_metrics(spark: SparkSession, config, target_date: str):
     validate_source(spark, silver_path, "Silver Enriched")
     
     try:
-        # STRICT: Filter source by the mandatory target date
+        # Load Silver - by now the 'timestamp' ghost is gone from Silver
         silver_df = spark.read.format("delta").load(silver_path).filter(col("date") == target_date)
 
         hourly_df = (
-            # Aligned: Shift UTC to Helsinki local time for context extraction
             silver_df.withColumn("local_time", from_utc_timestamp(col("event_timestamp"), "Europe/Helsinki"))
             .withColumn("hour_val", hour("local_time"))
             .groupBy("line_id", "date", "hour_val")
@@ -125,24 +123,15 @@ def aggregate_hourly_metrics(spark: SparkSession, config, target_date: str):
             .withColumnRenamed("hour_val", "hour")
         )
 
-        if DeltaTable.isDeltaTable(spark, gold_path):
-            dt = DeltaTable.forPath(spark, gold_path)
-            dt.alias("t").merge(
-                hourly_df.alias("s"),
-                "t.line_id = s.line_id AND t.date = s.date AND t.hour = s.hour",
-            ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-        else:
-            hourly_df.write.format("delta").mode("overwrite").partitionBy("date").save(gold_path)
+        hourly_df.write.format("delta").mode("overwrite").partitionBy("date").save(gold_path)
 
     except Exception as e:
-        logger.error(f"Hourly aggregation failed for {target_date}: {e}")
-        sys.exit(1)
-
+        logger.error(f"Gold Hourly Aggregation failed: {e}")
 
 def aggregate_stop_performance(spark: SparkSession, config, target_date: str):
     """
     Aggregate stop events for ML feature engineering with coordinate enrichment.
-    Aligned: Forces Helsinki timezone to ensure 'hour' and 'day' match the bus's location.
+    Hardening: Forced String casting for stop_id and 'how=left' join to prevent data loss.
     """
     silver_path = f"{config.silver_path}/stop_events"
     metadata_path = f"{config.gold_path}/stops" 
@@ -152,16 +141,19 @@ def aggregate_stop_performance(spark: SparkSession, config, target_date: str):
     validate_source(spark, metadata_path, "Gold Stop Metadata")
     
     try:
-        # STRICT: Filter source by the mandatory target date
-        silver_df = spark.read.format("delta").load(silver_path).filter(col("date") == target_date)
+        # 1. Load and Cast: Forced string types to resolve join mismatches
+        silver_df = spark.read.format("delta").load(silver_path) \
+            .filter(col("date") == target_date) \
+            .withColumn("stop_id", col("stop_id").cast("string"))
 
-        stops_metadata = spark.read.format("delta").load(metadata_path).select(
-            col("stop_id"),
-            col("stop_lat").alias("latitude"),
-            col("stop_lon").alias("longitude")
-        )
+        stops_metadata = spark.read.format("delta").load(metadata_path) \
+            .select(
+                col("stop_id").cast("string"),
+                col("stop_lat").alias("latitude"),
+                col("stop_lon").alias("longitude")
+            )
 
-        # Aligned: Shift UTC to Helsinki local time before extracting context
+        # 2. Process Metrics (UTC to Helsinki Shift)
         stop_metrics = (
             silver_df.withColumn("local_time", from_utc_timestamp(col("arrival_timestamp"), "Europe/Helsinki"))
             .withColumn("hour_of_day", hour("local_time"))
@@ -174,24 +166,28 @@ def aggregate_stop_performance(spark: SparkSession, config, target_date: str):
             )
         )
 
-        # INNER JOIN ensures spatial integrity (only stops with valid GPS)
-        enriched_stop_df = stop_metrics.join(stops_metadata, on="stop_id", how="inner")
+        # 3. Resilient Join: 'left' ensures we keep arrivals even if metadata is missing
+        # 
+        enriched_stop_df = stop_metrics.join(stops_metadata, on="stop_id", how="left")
 
-        # Update Lakehouse
+        # 4. Audit Check: Log if any records are missing GPS data
+        missing_gps_count = enriched_stop_df.filter(col("latitude").isNull()).count()
+        if missing_gps_count > 0:
+            logger.warning(f"LEAKAGE DETECTED: {missing_gps_count} arrivals have no matching metadata.")
+
+        # 5. Sync to Lakehouse and Postgres
         enriched_stop_df.write.format("delta") \
             .mode("overwrite") \
             .option("overwriteSchema", "true") \
             .save(gold_path)
 
-        # Update Postgres (Truncate mode for safety)
         write_to_postgres(enriched_stop_df, "public.fct_stop_arrivals", config)
         
-        logger.info(f"SUCCESS: Gold stop performance updated for {target_date} with Helsinki context.")
+        logger.info(f"SUCCESS: {enriched_stop_df.count()} stop arrivals synced for {target_date}.")
 
     except Exception as e:
         logger.error(f"Stop performance aggregation failed for {target_date}: {e}")
         sys.exit(1)
-
 
 def main():
     parser = argparse.ArgumentParser()

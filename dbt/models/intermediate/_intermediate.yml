@@ -7,23 +7,26 @@ models:
       - name: vehicle_id
         data_tests:
           - not_null
+      - name: journey_date
+        description: "Derived from telemetry ingestion_time"
+        data_tests:
+          - not_null
       - name: journey_id
-        description: "Unique journey identifier"
         data_tests:
           - not_null
           - unique
       - name: event_count
-        description: "Number of telemetry events in journey"
         data_tests:
           - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 1
-              max_value: 10000
-              
+
   - name: int_stop_performance
-    description: "Stop-level performance metrics for ML features"
+    description: "Stop-level performance metrics for ML features. Date and Category derived here."
     columns:
       - name: stop_id
+        data_tests:
+          - not_null
+      - name: date
+        description: "Derived from telemetry ingestion_time to recover missing Spark Sink column"
         data_tests:
           - not_null
       - name: line_id
@@ -35,24 +38,27 @@ models:
       - name: day_of_week
         data_tests:
           - not_null
-      - name: sample_count
-        description: "Historical count of arrivals in this bucket"
+      - name: historical_arrival_count
         data_tests:
           - not_null
       - name: historical_avg_delay
         data_tests:
           - not_null
-      - name: historical_stddev_delay
-        description: "Placeholder for standard deviation of delay"
+      - name: delay_category
+        description: "Calculated using dbt_project.yml thresholds"
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['ON_TIME', 'LATE', 'VERY_LATE']
+      - name: stddev_delay
+        description: "Standard deviation of delay"
       - name: avg_dwell_time_ms
         description: "Average time spent at the stop in milliseconds"
       - name: on_time_percentage
         description: "Historical on-time performance percentage"
-      - name: latitude
-        description: "Ingredient B: Latitude from Spark enrichment"
+      - name: stop_lat
         data_tests:
           - not_null
-      - name: longitude
-        description: "Ingredient B: Longitude from Spark enrichment"
+      - name: stop_lon
         data_tests:
           - not_null

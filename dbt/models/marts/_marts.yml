@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: fct_stop_arrivals
-    description: "Final Feature Store table for API serving - Aggregated Stop Performance"
+    description: "Final Feature Store table for API serving - Event-level Stop Performance"
     config:
       contract:
         enforced: true
@@ -23,10 +23,20 @@ models:
                 severity: warn
       - name: line_id
         data_type: text
+      - name: event_date
+        data_type: date
+        data_tests:
+          - not_null
       - name: hour_of_day
         data_type: integer
       - name: day_of_week
         data_type: integer
+      - name: delay_category
+        data_type: text
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['ON_TIME', 'LATE', 'VERY_LATE']
       - name: historical_arrival_count
         data_type: bigint
       - name: historical_avg_delay
@@ -41,9 +51,9 @@ models:
         data_type: text
       - name: zone_id
         data_type: text
-      - name: latitude
+      - name: stop_lat
         data_type: double precision
-      - name: longitude
+      - name: stop_lon
         data_type: double precision
       - name: stop_code
         data_type: text
@@ -51,9 +61,19 @@ models:
         data_type: text
       - name: line_type
         data_type: text
+      - name: processing_time
+        data_type: timestamp
+      - name: ingestion_time
+        data_type: timestamp
+      # METADATA ADDITIONS FOR UNIQUENESS
+      - name: kafka_partition
+        data_type: integer
+      - name: kafka_offset
+        data_type: bigint
     data_tests:
+      # Guaranteed unique via Kafka markers.
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns: [stop_id, line_id, hour_of_day, day_of_week]
+          combination_of_columns: [kafka_partition, kafka_offset, stop_id]
 
   - name: fct_daily_performance
     description: "Daily aggregated performance metrics by line."

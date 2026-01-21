@@ -2,6 +2,7 @@
 """
 Register Avro schemas with Schema Registry.
 Final Version: Fully implemented check-only logic, no emojis.
+Hardened for Phase 4: 1-to-1 Mirroring and Ingredient B alignment.
 """
 
 import argparse
@@ -22,7 +23,8 @@ SCHEMAS = {
         "namespace": "fi.transitflow",
         "doc": "Raw vehicle position from HSL MQTT",
         "fields": [
-            {"name": "vehicle_id", "type": "int", "doc": "Unique vehicle identifier"},
+            # Hardened: Using string to match dbt text casts and preserve leading zeros
+            {"name": "vehicle_id", "type": "string", "doc": "Unique vehicle identifier"},
             {"name": "timestamp", "type": "string", "doc": "ISO 8601 timestamp"},
             {"name": "event_time_ms", "type": "long", "doc": "Event time in milliseconds"},
             {"name": "latitude", "type": "double", "doc": "WGS84 latitude"},
@@ -34,7 +36,7 @@ SCHEMAS = {
             {"name": "line_id", "type": ["null", "string"], "default": None},
             {"name": "direction_id", "type": ["null", "int"], "default": None},
             {"name": "operator_id", "type": ["null", "int"], "default": None},
-            {"name": "next_stop_id", "type": ["null", "int"], "default": None},
+            {"name": "next_stop_id", "type": ["null", "string"], "default": None},
         ],
     },
     "enriched_event-value": {
@@ -42,7 +44,7 @@ SCHEMAS = {
         "name": "EnrichedEvent",
         "namespace": "fi.transitflow",
         "fields": [
-            {"name": "vehicle_id", "type": "int"},
+            {"name": "vehicle_id", "type": "string"},
             {"name": "timestamp", "type": "string"},
             {"name": "event_time_ms", "type": "long"},
             {"name": "latitude", "type": "double"},
@@ -53,19 +55,28 @@ SCHEMAS = {
             {"name": "delay_trend", "type": ["null", "double"], "default": None},
             {"name": "is_stopped", "type": ["null", "boolean"], "default": None},
             {"name": "processing_time", "type": ["null", "long"], "default": None},
+            # Hardened: Including Spark-provided category for 1-to-1 dbt staging
+            {"name": "delay_category", "type": ["null", "string"], "default": None},
         ],
     },
     "stop_event-value": {
         "type": "record",
         "name": "StopEvent",
         "namespace": "fi.transitflow",
-        "doc": "Stop arrival event for ML labels",
+        "doc": "Stop arrival event - Ingredient B (Stop Performance)",
         "fields": [
-            {"name": "vehicle_id", "type": "int"},
-            {"name": "stop_id", "type": "int"},
-            {"name": "arrival_time", "type": "long"},
-            {"name": "delay_at_arrival", "type": "int"},
-            {"name": "dwell_time_ms", "type": ["null", "long"], "default": None},
+            {"name": "stop_id", "type": "string"},
+            {"name": "line_id", "type": "string"},
+            {"name": "date", "type": "string", "doc": "Partition date"},
+            {"name": "hour_of_day", "type": "int"},
+            {"name": "day_of_week", "type": "int"},
+            # Metrics Reverted: Matching Spark Gold Sink 1-to-1
+            {"name": "historical_arrival_count", "type": "long"},
+            {"name": "historical_avg_delay", "type": "double"},
+            {"name": "avg_dwell_time_ms", "type": "double"},
+            # Spatial: Matching GTFS/dbt name (stop_lat)
+            {"name": "stop_lat", "type": "double"},
+            {"name": "stop_lon", "type": "double"},
         ],
     },
 }

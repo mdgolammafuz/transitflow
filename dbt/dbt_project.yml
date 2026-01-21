@@ -1,5 +1,6 @@
 # TransitFlow dbt Project
 # Pattern: Semantic Interface - Unified Serving Layer
+# UTC Lock and Alias-Free Lineage
 
 name: 'transitflow'
 version: '1.0.0'
@@ -19,7 +20,6 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
-# Model configurations
 models:
   transitflow:
     staging:
@@ -35,24 +35,27 @@ models:
       +materialized: table
       +schema: marts
 
-# Seed configurations: GTFS Static Data
-# Explicit routing: each file gets its own explicit alias
+# --- Seed configurations ---
 seeds:
   transitflow:
     +schema: reference
-    seed_stops:
-      +alias: stops
-    seed_lines:
-      +alias: lines
+    +quote_columns: false 
 
-# Test configurations
+# --- Snapshot configurations ---
+snapshots:
+  transitflow:
+    +target_schema: snapshots
+
 tests:
   +severity: error
   +store_failures: true
 
 vars:
-  on_time_threshold: 60
-  delayed_threshold: 300
+  # Standardized names to match audited SQL logic
+  on_time_threshold_seconds: 60
+  late_threshold_seconds: 300
   max_delay_seconds: 7200
   min_delay_seconds: -3600
   scd_end_date: '2099-12-31 23:59:59'
+  # Target Date: Dynamically injected for OCI/Cron runs
+  target_date: "{{ env_var('DATE', run_started_at.strftime('%Y-%m-%d')) }}"
