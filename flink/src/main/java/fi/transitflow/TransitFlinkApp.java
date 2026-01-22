@@ -38,7 +38,7 @@ public class TransitFlinkApp {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(ConfigLoader.parallelism());
 
-        // Pattern: DE#6 Idempotency - Exactly-Once Checkpointing
+        // Pattern: Idempotency - Exactly-Once Checkpointing
         env.enableCheckpointing(ConfigLoader.checkpointIntervalMs());
         env.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
         env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000); // Prevent thrashing
@@ -70,7 +70,7 @@ public class TransitFlinkApp {
                 .process(new VehicleStateFunction())
                 .name("feature-enrichment-engine");
 
-        // Side Output: Decoupled Stop Arrival labels for Phase 5
+        // Side Output: Decoupled Stop Arrival labels
         DataStream<StopArrival> stopStream = enrichedStream
                 .getSideOutput(VehicleStateFunction.STOP_ARRIVAL_TAG);
 
@@ -102,7 +102,7 @@ public class TransitFlinkApp {
                 .sinkTo(stopSink)
                 .name("kafka-sink-ml-labels");
 
-        // Redis Sink: Phase 5 Real-time Feature Store
+        // Redis Sink: Real-time Feature Store
         enrichedStream
                 .addSink(new RedisSink())
                 .name("redis-feature-sink");
