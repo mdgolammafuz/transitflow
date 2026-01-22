@@ -155,14 +155,29 @@ test-ingestion:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/ingestion/ -v
 
 # --- Streaming Enrichment (Flink) ---
+
+# Build the JAR and move it to the shared volume path
 flink-build:
 	cd flink && mvn clean package -DskipTests
 	@mkdir -p infra/local/flink-jobs
 	cp flink/target/transitflow-flink-1.0.0.jar infra/local/flink-jobs/
 
+# List all running jobs to the console
+flink-list:
+	docker exec -it flink-jobmanager flink list
+
+# Stop all running jobs (DANGER: Stops everything in the local cluster)
+flink-stop:
+	@echo "Stopping all running Flink jobs..."
+	docker exec -it flink-jobmanager bash -c "flink list | grep RUNNING | cut -d ' ' -f 4 | xargs -r flink cancel"
+
+# Clean start: Build, Stop existing, and Submit new
+flink-deploy: flink-build flink-stop flink-submit
+
+# Submit the job to the JobManager
 flink-submit:
 	docker exec -it flink-jobmanager flink run -d /opt/flink/jobs/transitflow-flink-1.0.0.jar
-
+	
 # --- Delta Lake Processing (Spark) ---
 
 # 1. Kafka to MinIO (Continuous Delta Lake Stream)
