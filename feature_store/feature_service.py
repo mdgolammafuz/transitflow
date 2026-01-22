@@ -1,9 +1,7 @@
 """
 Feature Service - Unified Feature Access.
-
 Pattern: Semantic Interface & ML Reproducibility
 Methodical: Updated to direct ms mapping for dwell time and historical naming.
-Robust: Handles missing online data with fallbacks to Ingredient B (spatial).
 """
 
 import logging
@@ -54,52 +52,60 @@ class CombinedFeatures:
 
         # 1. Real-time (Online) features
         if self.online:
-            features.update({
-                "current_delay": self.online.current_delay,
-                "delay_trend": getattr(self.online, 'delay_trend', 0.0),
-                "current_speed": getattr(self.online, 'current_speed', 0.0),
-                "speed_trend": getattr(self.online, 'speed_trend', 0.0),
-                "is_stopped": 1 if self.online.is_stopped else 0,
-                "stopped_duration_ms": self.online.stopped_duration_ms,
-                "latitude": self.online.latitude,
-                "longitude": self.online.longitude,
-                "feature_age_ms": self.online.feature_age_ms,
-            })
+            features.update(
+                {
+                    "current_delay": self.online.current_delay,
+                    "delay_trend": getattr(self.online, "delay_trend", 0.0),
+                    "current_speed": getattr(self.online, "current_speed", 0.0),
+                    "speed_trend": getattr(self.online, "speed_trend", 0.0),
+                    "is_stopped": 1 if self.online.is_stopped else 0,
+                    "stopped_duration_ms": self.online.stopped_duration_ms,
+                    "latitude": self.online.latitude,
+                    "longitude": self.online.longitude,
+                    "feature_age_ms": self.online.feature_age_ms,
+                }
+            )
         else:
             # Robust defaults for missing real-time data
-            features.update({
-                "current_delay": 0,
-                "delay_trend": 0.0,
-                "current_speed": 0.0,
-                "speed_trend": 0.0,
-                "is_stopped": 0,
-                "stopped_duration_ms": 0,
-                "latitude": None,
-                "longitude": None,
-                "feature_age_ms": -1,
-            })
+            features.update(
+                {
+                    "current_delay": 0,
+                    "delay_trend": 0.0,
+                    "current_speed": 0.0,
+                    "speed_trend": 0.0,
+                    "is_stopped": 0,
+                    "stopped_duration_ms": 0,
+                    "latitude": None,
+                    "longitude": None,
+                    "feature_age_ms": -1,
+                }
+            )
 
-        # 2. Historical (Offline) features - Phase 5 'historical_' alignment
+        # 2. Historical (Offline) features - 'historical_' alignment
         if self.offline:
             # Spatial Fallback: Use historical stop coordinates if real-time GPS is lost
             if features.get("latitude") is None:
                 features["latitude"] = self.offline.latitude
                 features["longitude"] = self.offline.longitude
 
-            features.update({
-                "historical_avg_delay": self.offline.historical_avg_delay,
-                "historical_stddev_delay": self.offline.historical_stddev_delay,
-                "avg_dwell_time_ms": self.offline.avg_dwell_time_ms, # Direct mapping from Gold Mart
-                "historical_arrival_count": self.offline.historical_arrival_count,
-            })
+            features.update(
+                {
+                    "historical_avg_delay": self.offline.historical_avg_delay,
+                    "historical_stddev_delay": self.offline.historical_stddev_delay,
+                    "avg_dwell_time_ms": self.offline.avg_dwell_time_ms,  # Direct mapping from Gold Mart
+                    "historical_arrival_count": self.offline.historical_arrival_count,
+                }
+            )
         else:
             # Defaults aligned with ML model expected scale
-            features.update({
-                "historical_avg_delay": 0.0,
-                "historical_stddev_delay": 0.0,
-                "avg_dwell_time_ms": 0.0,
-                "historical_arrival_count": 0,
-            })
+            features.update(
+                {
+                    "historical_avg_delay": 0.0,
+                    "historical_stddev_delay": 0.0,
+                    "avg_dwell_time_ms": 0.0,
+                    "historical_arrival_count": 0,
+                }
+            )
 
         return features
 
@@ -183,7 +189,7 @@ class FeatureService:
             online_data = self._online_store.get_features(vehicle_id)
             if online_data:
                 self._metrics.online_hits += 1
-                
+
                 # Use Live Data to populate the Handshake Keys if not overridden
                 if stop_id is None:
                     stop_id = online_data.next_stop_id
@@ -199,15 +205,14 @@ class FeatureService:
             try:
                 # We now pass line_id to ensure the historical match is precise
                 offline_data = self._offline_store.get_stop_features(
-                    stop_id=stop_id, 
-                    line_id=line_id, 
-                    hour_of_day=h_ctx, 
-                    day_of_week=d_ctx
+                    stop_id=stop_id, line_id=line_id, hour_of_day=h_ctx, day_of_week=d_ctx
                 )
                 if offline_data:
                     self._metrics.offline_hits += 1
                 else:
-                    logger.warning(f"Handshake failed: No history for Stop {stop_id} | Line {line_id}")
+                    logger.warning(
+                        f"Handshake failed: No history for Stop {stop_id} | Line {line_id}"
+                    )
             except Exception as e:
                 self._metrics.offline_errors += 1
                 logger.error(f"Offline store failure for stop {stop_id}: {e}")

@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from feature_store.config import FeatureStoreConfig
 from feature_store.feature_service import FeatureService
@@ -63,6 +63,7 @@ class HealthResponse(BaseModel):
 
 class OnlineFeaturesResponse(BaseModel):
     """Synchronized with Java RedisSink and Python OnlineStore."""
+
     vehicle_id: int
     line_id: Optional[str]
     current_delay: int
@@ -80,6 +81,7 @@ class OnlineFeaturesResponse(BaseModel):
 
 class OfflineFeaturesResponse(BaseModel):
     """Synchronized with validated Phase 5 dbt Gold Marts."""
+
     stop_id: str
     line_id: str
     hour_of_day: int
@@ -108,10 +110,7 @@ async def health_check():
         raise HTTPException(status_code=503, detail="Service not initialized")
     health = feature_service.health_check()
     active = feature_service.get_active_vehicles()
-    return {
-        **health,
-        "active_vehicles": active
-    }
+    return {**health, "active_vehicles": active}
 
 
 @app.get("/features/{vehicle_id}", response_model=CombinedFeaturesResponse)
@@ -139,7 +138,7 @@ async def get_features(
     )
     latency_ms = (time.perf_counter() - start) * 1000
 
-    # Principal Note: Returning a dict allows Pydantic to handle the 
+    # Returning a dict allows Pydantic to handle the
     # complex serialization/type-checking automatically.
     return {
         "vehicle_id": combined.vehicle_id,
@@ -173,6 +172,7 @@ async def get_metrics():
 
 if __name__ == "__main__":
     import uvicorn
+
     host = os.environ.get("API_HOST", "127.0.0.1")
     port = int(os.environ.get("API_PORT", 8000))
     uvicorn.run(app, host=host, port=port)

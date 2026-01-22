@@ -125,7 +125,7 @@ public class EnrichedEvent {
     public double getSpeedTrend() { return speedTrend; }
     public double getDistanceSinceLastM() { return distanceSinceLastM; }
     public long getTimeSinceLastMs() { return timeSinceLastMs; }
-    public boolean isStopped() { return isStopped; }
+    public boolean getIsStopped() { return isStopped; }
     public long getStoppedDurationMs() { return stoppedDurationMs; }
     public long getProcessingTime() { return processingTime; }
 }

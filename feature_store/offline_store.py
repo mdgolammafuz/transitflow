@@ -16,6 +16,7 @@ from feature_store.config import FeatureStoreConfig
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class StopFeatures:
     """Historical features for a stop. Aligned with fct_stop_arrivals schema."""
@@ -28,7 +29,7 @@ class StopFeatures:
     longitude: float
     historical_avg_delay: float
     historical_stddev_delay: float
-    avg_dwell_time_ms: float  # UPDATED: Matches dbt/Spark output
+    avg_dwell_time_ms: float  # Matches dbt/Spark output
     historical_arrival_count: int
 
     def to_dict(self) -> Dict[str, Any]:
@@ -44,6 +45,7 @@ class StopFeatures:
             "avg_dwell_time_ms": self.avg_dwell_time_ms,
             "historical_arrival_count": self.historical_arrival_count,
         }
+
 
 class OfflineStore:
     """PostgreSQL-based offline feature store targeting the 'marts' schema."""
@@ -66,7 +68,7 @@ class OfflineStore:
 
             # Explicitly setting the search path to marts to avoid 'public' shadow tables
             with self._conn.cursor() as cur:
-                cur.execute(f"SET search_path TO marts, public")
+                cur.execute("SET search_path TO marts, public")
 
             logger.info("Connected to PostgreSQL. Schema context: marts")
         except OperationalError as e:
@@ -94,13 +96,12 @@ class OfflineStore:
         finally:
             cur.close()
 
-
     def get_stop_features(
-        self, 
-        stop_id: str, 
+        self,
+        stop_id: str,
         line_id: Optional[str] = None,
-        hour_of_day: Optional[int] = None, 
-        day_of_week: Optional[int] = None
+        hour_of_day: Optional[int] = None,
+        day_of_week: Optional[int] = None,
     ) -> Optional[StopFeatures]:
         """
         Retrieves historical features from the dbt mart with contextual fallback.
@@ -113,8 +114,8 @@ class OfflineStore:
                 line_id,
                 hour_of_day,
                 day_of_week,
-                latitude,
-                longitude,
+                stop_lat,
+                stop_lon,
                 historical_avg_delay,
                 historical_stddev_delay,
                 avg_dwell_time_ms,
@@ -130,17 +131,14 @@ class OfflineStore:
         try:
             with self._cursor() as cur:
                 # Pass parameters twice for the 'IS NULL OR' check and the 'ORDER BY' logic
-                params = (
-                    str(stop_id), 
-                    line_id, line_id, 
-                    hour_of_day, day_of_week, 
-                    hour_of_day
-                )
+                params = (str(stop_id), line_id, line_id, hour_of_day, day_of_week, hour_of_day)
                 cur.execute(query, params)
                 row = cur.fetchone()
 
                 if not row:
-                    logger.warning(f"No historical data found for Stop: {stop_id} | Line: {line_id}")
+                    logger.warning(
+                        f"No historical data found for Stop: {stop_id} | Line: {line_id}"
+                    )
                     return None
 
                 return StopFeatures(
@@ -148,8 +146,8 @@ class OfflineStore:
                     line_id=str(row.get("line_id", "UNKNOWN")),
                     hour_of_day=int(row["hour_of_day"]),
                     day_of_week=int(row["day_of_week"]),
-                    latitude=float(row.get("latitude") or 0.0),
-                    longitude=float(row.get("longitude") or 0.0),
+                    latitude=float(row.get("stop_lat") or 0.0),
+                    longitude=float(row.get("stop_lon") or 0.0),
                     historical_avg_delay=float(row.get("historical_avg_delay") or 0.0),
                     historical_stddev_delay=float(row.get("historical_stddev_delay") or 0.0),
                     avg_dwell_time_ms=float(row.get("avg_dwell_time_ms") or 0.0),

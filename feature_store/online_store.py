@@ -7,13 +7,15 @@ Clean: Removes silent defaults that mask data loss.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import redis
 from redis.exceptions import RedisError
+
 from feature_store.config import FeatureStoreConfig
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class OnlineFeatures:
@@ -27,7 +29,7 @@ class OnlineFeatures:
     stopped_duration_ms: int
     latitude: float
     longitude: float
-    next_stop_id: Optional[str] # Changed to str for reliable DB Handshake
+    next_stop_id: Optional[str]  # Changed to str for reliable DB Handshake
     updated_at: int
     feature_age_ms: int
 
@@ -48,6 +50,7 @@ class OnlineFeatures:
             "feature_age_ms": self.feature_age_ms,
         }
 
+
 class OnlineStore:
     def __init__(self, config: FeatureStoreConfig):
         self._config = config
@@ -60,7 +63,7 @@ class OnlineStore:
                 host=self._config.redis_host,
                 port=self._config.redis_port,
                 password=self._config.redis_password,
-                decode_responses=True, # Critical for String handling
+                decode_responses=True,  # Critical for String handling
                 socket_timeout=self._config.request_timeout_seconds,
             )
             self._client.ping()
@@ -89,7 +92,7 @@ class OnlineStore:
             # Spatial data must be present
             lat = float(data.get("latitude", 0.0))
             lon = float(data.get("longitude", 0.0))
-            
+
             # Handshake ID: Force to string to match Postgres 'text' type
             next_stop_raw = data.get("next_stop_id")
             next_stop_id = str(next_stop_raw).strip() if next_stop_raw else None
@@ -117,14 +120,17 @@ class OnlineStore:
             raise
 
     def get_features(self, vehicle_id: int) -> Optional[OnlineFeatures]:
-        if not self._client: return None
+        if not self._client:
+            return None
         key = f"{self._config.redis_key_prefix}{vehicle_id}"
         data = self._client.hgetall(key)
-        if not data: return None
-        
+        if not data:
+            return None
+
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         return self._parse_features(data, vehicle_id, now_ms)
 
     def get_active_vehicle_count(self) -> int:
-        if not self._client: return 0
+        if not self._client:
+            return 0
         return sum(1 for _ in self._client.scan_iter(match=f"{self._config.redis_key_prefix}*"))

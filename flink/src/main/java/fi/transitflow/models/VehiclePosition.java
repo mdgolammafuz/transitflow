@@ -62,6 +62,7 @@ public class VehiclePosition {
     public VehiclePosition() {}
 
     // --- Helpers ---
+    @com.fasterxml.jackson.annotation.JsonIgnore
     public boolean isDoorOpen() {
         return doorStatus == 1;
     }

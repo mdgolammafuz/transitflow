@@ -29,7 +29,7 @@ public class StopArrival {
     @JsonProperty("dwell_time_ms")
     private Long dwellTimeMs;
 
-    @JsonProperty("door_opened")
+    @JsonProperty("door_status")
     private boolean doorOpened;
 
     @JsonProperty("latitude")
@@ -62,7 +62,7 @@ public class StopArrival {
     public long getArrivalTime() { return arrivalTime; }
     public int getDelayAtArrival() { return delayAtArrival; }
     public Long getDwellTimeMs() { return dwellTimeMs; }
-    public boolean isDoorOpened() { return doorOpened; }
+    public boolean getIsDoorOpened() { return doorOpened; }
     public double getLatitude() { return latitude; }
     public double getLongitude() { return longitude; }
 

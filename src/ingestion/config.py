@@ -13,8 +13,8 @@ class MQTTConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MQTT_")
 
     host: str = Field(default="mqtt.hsl.fi")
-    port: int = Field(default=8883)
-    use_tls: bool = Field(default=True)
+    port: int = Field(default=1883)
+    use_tls: bool = Field(default=False)
 
     # Topic filter: /hfp/v2/journey/ongoing/vp/{transport_mode}/#
     topic: str = Field(default="/hfp/v2/journey/ongoing/vp/bus/#")

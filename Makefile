@@ -141,10 +141,18 @@ test-all:
 
 # --- Ingestion Control ---
 run:
-	PYTHONPATH=$(CURDIR) python3 scripts/run_bridge.py --line 600
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/run_bridge.py --line 600
 
 run-full:
-	PYTHONPATH=$(CURDIR) python3 scripts/run_bridge.py
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/run_bridge.py
+
+# Verification tool
+verify-ingestion:
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_ingestion.py --full
+
+# Run ONLY ingestion unit tests
+test-ingestion:
+	PYTHONPATH=$(CURDIR) pytest tests/unit/ingestion/ -v
 
 # --- Streaming Enrichment (Flink) ---
 flink-build:
@@ -278,11 +286,14 @@ dbt-docs:
 	@echo "Serving documentation at http://localhost:8085"
 	$(DBT_ENV) dbt docs serve --port 8085
 	
+# Ensure DATE defaults to today if not provided via 'make feature-sync DATE=...'
+DATE ?= $(shell date +%Y-%m-%d)
+
 # --- Feature Store & ML Serving ---
 feature-api:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 feature_store/api.py
 
-# Optimized: Explicit S3A configs to ensure sync always succeeds
+# Optimized: Pass $(DATE) as a CLI argument to the Python script inside Spark
 feature-sync:
 	$(SPARK_SUBMIT) \
 		--master "local[*]" \
@@ -293,14 +304,14 @@ feature-sync:
 		--conf spark.hadoop.fs.s3a.path.style.access=true \
 		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
 		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
-		/opt/spark/jobs/feature_store/feature_sync.py
+		/opt/spark/jobs/feature_store/feature_sync.py $(DATE)
 
 feature-verify:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_feature_store.py --check-all
 
 feature-test:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/feature_store/ -v
-
+	
 train-model:
 	@echo "Starting ML Training Pipeline..."
 	$(SPARK_SUBMIT) /opt/spark/jobs/ml_pipeline/training.py

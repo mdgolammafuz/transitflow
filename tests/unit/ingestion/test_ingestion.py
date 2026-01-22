@@ -2,7 +2,7 @@
 Unit tests for ingestion module.
 Pattern: Clean Code / Domain Validation
 Aligned: Updated to verify String-IDs, forced UTC, and HSL-compliant integer door status.
-Fixed: Corrected 2026 epoch millisecond assertion.
+Honest: Verified that NULL sensors remain NULL (No more Zero-Cheating).
 """
 
 import json
@@ -20,7 +20,7 @@ class TestVehiclePosition:
         """Basic valid position for Jan 2026 with String-ID contract."""
         pos = VehiclePosition(
             vehicle_id="1234",  # Aligned: ID as String
-            timestamp=datetime(2026, 1, 17, 22, 0, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 1, 22, 10, 0, 0, tzinfo=timezone.utc),
             latitude=60.17,
             longitude=24.94,
             speed_ms=12.5,
@@ -34,16 +34,16 @@ class TestVehiclePosition:
         # Aligned: Asserting String ID
         assert pos.vehicle_id == "1234"
         assert pos.delay_seconds == 120
-        # Unix Epoch for 2026-01-17 22:00:00 UTC
-        # Calculation: 1768687200 seconds * 1000
-        assert pos.event_time_ms == 1768687200000
+        # Unix Epoch for 2026-01-22 10:00:00 UTC
+        # Calculation: 1769076000 seconds * 1000
+        assert pos.event_time_ms == 1769076000000
 
     def test_timestamp_parsing_utc(self):
         """Ensure ISO timestamp strings are forced to UTC awareness."""
         # Test with 'Z' suffix
         pos_z = VehiclePosition(
             vehicle_id="1234",
-            timestamp="2026-01-17T22:00:00Z",
+            timestamp="2026-01-22T10:00:00Z",
             latitude=60.17,
             longitude=24.94,
             speed_ms=0,
@@ -59,7 +59,7 @@ class TestVehiclePosition:
         # Test with naive string (forced to UTC by our validator)
         pos_naive = VehiclePosition(
             vehicle_id="1234",
-            timestamp="2026-01-17T22:00:00",
+            timestamp="2026-01-22T10:00:00",
             latitude=60.17,
             longitude=24.94,
             speed_ms=0,
@@ -78,7 +78,7 @@ class TestVehiclePosition:
             VehiclePosition(
                 vehicle_id="1234",
                 timestamp=datetime.now(timezone.utc),
-                latitude=50.0,  # FAIL: Outside Helsinki
+                latitude=50.0,  # FAIL: Outside Helsinki region
                 longitude=24.94,
                 speed_ms=0,
                 heading=0,
@@ -97,7 +97,7 @@ class TestVehiclePosition:
                 timestamp=datetime.now(timezone.utc),
                 latitude=60.17,
                 longitude=24.94,
-                speed_ms=100.0,  # FAIL: 360 km/h is unrealistic
+                speed_ms=100.0,  # FAIL: Unrealistic speed
                 heading=0,
                 delay_seconds=0,
                 door_status=0,
@@ -117,7 +117,7 @@ class TestRawHSLPayload:
             "dir": "1",
             "oper": 22,
             "veh": 1234,  # Raw input is integer
-            "tst": "2026-01-17T22:00:00.000Z",
+            "tst": "2026-01-22T10:00:00.000Z",
             "tsi": 1737151200,
             "spd": 12.5,
             "hdg": 180,
@@ -132,13 +132,16 @@ class TestRawHSLPayload:
         # Aligned: Raw int 1234 must be string "1234"
         assert pos.vehicle_id == "1234"
         assert pos.line_id == "600"
-        assert pos.door_status == 1  # Maintained as int per HSL spec
+        assert pos.door_status == 1
 
-    def test_null_handling(self):
-        """Handle null optional fields by providing safe defaults."""
+    def test_null_handling_honesty(self):
+        """
+        AUDIT: Handle null optional fields by maintaining them as None.
+        Principal Rule: No hardcoding zeros in the ingestion layer.
+        """
         data = {
             "veh": 1234,
-            "tst": "2026-01-17T22:00:00.000Z",
+            "tst": "2026-01-22T10:00:00.000Z",
             "tsi": 1737151200,
             "lat": 60.17,
             "long": 24.94,
@@ -150,9 +153,24 @@ class TestRawHSLPayload:
         raw = RawHSLPayload.model_validate(data)
         pos = raw.to_vehicle_position()
 
-        assert pos.speed_ms == 0.0
-        assert pos.heading == 0
-        assert pos.door_status == 0
+        # These fields should be None, not 0.0
+        assert pos.speed_ms is None
+        assert pos.heading is None
+        assert pos.delay_seconds is None
+        assert pos.door_status is None
+
+    def test_gps_dropout_raises_error(self):
+        """Missing GPS must raise ValueError to trigger DLQ logic."""
+        data = {
+            "veh": 1234,
+            "tst": "2026-01-22T10:00:00.000Z",
+            "tsi": 1737540930,
+            "lat": None,  # Dropout
+            "long": 24.94,
+        }
+        raw = RawHSLPayload.model_validate(data)
+        with pytest.raises(ValueError, match="GPS dropout detected"):
+            raw.to_vehicle_position()
 
 
 class TestInvalidEvent:
@@ -168,6 +186,5 @@ class TestInvalidEvent:
 
         assert parsed["error_message"] == "Test error"
         assert parsed["error_field"] == "veh"
-        # Verify default factory for UTC time is working
         assert "received_at" in parsed
         assert parsed["received_at"].endswith("+00:00") or parsed["received_at"].endswith("Z")

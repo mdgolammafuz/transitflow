@@ -1,8 +1,8 @@
 /*
     Intermediate Model: int_stop_performance
-    Principal Alignment: Adjusted grain to Arrival level (Preserving the 21,930 events).
-    Hardening: Included Kafka metadata to allow for unique record identification in Marts.
-    Logic: Uses Window Functions to derive counts from telemetry to bypass empty Spark sinks.
+    Principal Alignment: Adjusted grain to Arrival level (Preserving the 15,903 events).
+    Hardening: Restoring the Signal by replacing placeholders with actual window functions.
+    Logic: Derives Standard Deviation and On-Time % directly from telemetry to fix the Zero Signal.
 */
 
 {{ config(
@@ -11,7 +11,7 @@
 ) }}
 
 with stopped_events as (
-    -- The source of truth: 21,930 verified stop events
+    -- The source of truth: 15,903 verified stop events
     select 
         trim(cast(next_stop_id as text)) as stop_id,
         trim(cast(line_id as text)) as line_id,
@@ -34,7 +34,7 @@ with stopped_events as (
 ),
 
 stop_metrics as (
-    -- Contextual data (Source: Spark Sink - Currently 0 rows)
+    -- Contextual data (Source: Spark Sink)
     select 
         trim(cast(stop_id as text)) as stop_id,
         trim(cast(line_id as text)) as line_id,
@@ -57,7 +57,6 @@ final as (
         s.day_of_week,
         
         -- Metrics: Using Window Functions to count telemetry arrivals per stop/line/day
-        -- Ensures historical_arrival_count matches reality (21,930 source) even if Sink is empty
         coalesce(
             m.historical_arrival_count, 
             count(*) over (partition by s.stop_id, s.line_id, s.event_date)
@@ -71,17 +70,28 @@ final as (
 
         -- Delay Category based on the individual event delay
         case 
-            when s.delay_seconds <= {{ var('on_time_threshold_seconds') }} then 'ON_TIME'
-            when s.delay_seconds <= {{ var('late_threshold_seconds') }} then 'LATE'
+            when s.delay_seconds <= {{ var('on_time_threshold_seconds', 60) }} then 'ON_TIME'
+            when s.delay_seconds <= {{ var('late_threshold_seconds', 300) }} then 'LATE'
             else 'VERY_LATE'
         end as delay_category,
         
-        -- Feature Prep placeholders
-        cast(0.0 as double precision) as stddev_delay,
-        cast(100.0 as double precision) as on_time_percentage,
+        -- RESTORED SIGNAL: Standard Deviation calculation (Population)
+        stddev_pop(s.delay_seconds) over (
+            partition by s.stop_id, s.line_id, s.hour_of_day
+        )::double precision as stddev_delay,
+
+        -- RESTORED SIGNAL: On-time percentage calculation
+        (count(*) filter (where s.delay_seconds <= {{ var('on_time_threshold_seconds', 60) }}) over (
+            partition by s.stop_id, s.line_id, s.hour_of_day
+        ) * 100.0 / nullif(count(*) over (
+            partition by s.stop_id, s.line_id, s.hour_of_day
+        ), 0))::double precision as on_time_percentage,
+
+        -- Dwell time: Default to 0.0 if not found in metrics, 
+        -- but preserved as a field for ML feature consistency
         coalesce(m.avg_dwell_time_ms, 0.0)::double precision as avg_dwell_time_ms,
 
-        -- Spatial
+        -- Spatial: Use metrics value if available, fallback to telemetry coordinates
         coalesce(m.stop_lat, s.latitude)::double precision as stop_lat,
         coalesce(m.stop_lon, s.longitude)::double precision as stop_lon,
 

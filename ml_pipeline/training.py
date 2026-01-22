@@ -11,14 +11,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import structlog
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
 from ml_pipeline.config import MLConfig
 from ml_pipeline.registry import ModelRegistry
 
-
-import structlog
 logger = structlog.get_logger(__name__)
 
 try:

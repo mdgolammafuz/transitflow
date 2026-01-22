@@ -1,8 +1,8 @@
 """
 Data models for HSL vehicle telemetry.
+Honest: Does not hardcode zeros for missing sensor data.
+Resilient: Explicitly casts IDs to str to satisfy Pydantic/Warehouse contract.
 Aligned: Enforces UTC-awareness at the point of ingestion.
-Robustness: Standardizes IDs as strings to match Lakehouse schema.
-Consistency: Maintains 'next_stop_id' to match HSL spec and prevent downstream breakage.
 Hardened: Gracefully handles GPS dropouts (null lat/long) from the HSL feed.
 """
 
@@ -23,10 +23,13 @@ class VehiclePosition(BaseModel):
     timestamp: datetime = Field(description="Event timestamp (Forced UTC)")
     latitude: float = Field(ge=59.0, le=61.0, description="WGS84 latitude")
     longitude: float = Field(ge=23.0, le=26.0, description="WGS84 longitude")
-    speed_ms: float = Field(ge=0, le=40, description="Speed in m/s")
-    heading: int = Field(ge=0, le=360, description="Heading in degrees")
-    delay_seconds: int = Field(ge=-600, le=7200, description="Schedule deviation")
-    door_status: int = Field(ge=0, le=1, description="0=closed, 1=open")
+
+    # Made Optional to prevent 0.0 defaults
+    speed_ms: Optional[float] = Field(default=None, ge=0, le=40, description="Speed in m/s")
+    heading: Optional[int] = Field(default=None, ge=0, le=360, description="Heading in degrees")
+    delay_seconds: Optional[int] = Field(default=None, ge=-600, le=7200, description="Schedule deviation")
+    door_status: Optional[int] = Field(default=None, ge=0, le=1, description="0=closed, 1=open")
+    
     odometer: Optional[int] = Field(default=None, description="Distance in meters")
 
     # Kept as next_stop_id to maintain consistency with HSL and existing code
@@ -77,15 +80,15 @@ class RawHSLPayload(BaseModel):
     veh: int = Field(description="Raw Vehicle ID")
     tst: str = Field(description="Timestamp ISO")
     tsi: int = Field(description="Timestamp Unix")
-    spd: Optional[float] = Field(default=0.0)
-    hdg: Optional[int] = Field(default=0)
+    spd: Optional[float] = Field(default=None)
+    hdg: Optional[int] = Field(default=None)
     
-    # RELAXED: Now Optional to allow Pydantic to accept 'null' values from HSL
+    # Now Optional to allow Pydantic to accept 'null' values from HSL
     lat: Optional[float] = Field(default=None, description="Latitude")
     long: Optional[float] = Field(default=None, description="Longitude")
     
-    dl: Optional[int] = Field(default=0)
-    drst: Optional[int] = Field(default=0)
+    dl: Optional[int] = Field(default=None)
+    drst: Optional[int] = Field(default=None)
     line: Optional[int] = Field(default=None)
     start: Optional[str] = Field(default=None)
     stop: Optional[int] = Field(default=None)
@@ -93,23 +96,35 @@ class RawHSLPayload(BaseModel):
 
     def to_vehicle_position(self) -> VehiclePosition:
         """
-        Flatten and validate raw payload into the clean contract.
-        Explicitly raises ValueError for missing GPS data to trigger DLQ logic.
+        Flatten and validate raw HSL payload into the standardized contract.
+        
+        STRICT AUDIT POINTS:
+        1. GPS INTEGRITY: Raises ValueError if lat/long are None. This is the only 
+           legal way to trigger the DLQ (Dead Letter Queue) in the bridge.
+        2. NO IDENTITY DRIFT: Explicitly casts IDs to str to satisfy Pydantic.
+        3. HONEST MAPPING: Removed hardcoded zeros. Sensor data defaults to None.
         """
-        # LOGICAL GUARD: Filter out dropouts here so Bridge can handle them as InvalidEvents
+        
+        # Guard 1: Without coordinates, the record is useless for Feature Engineering.
         if self.lat is None or self.long is None:
             raise ValueError(f"GPS dropout detected for vehicle {self.veh}")
 
         return VehiclePosition(
+            # Casting to str resolves 'Input should be string' logs
             vehicle_id=str(self.veh),
             timestamp=self.tst,
             latitude=self.lat,
             longitude=self.long,
-            speed_ms=self.spd or 0.0,
-            heading=self.hdg or 0,
-            delay_seconds=self.dl or 0,
-            door_status=self.drst or 0,
-            next_stop_id=str(self.stop) if self.stop else None,
+            
+            # If raw is None, passed as None.
+            speed_ms=self.spd,
+            heading=self.hdg,
+            delay_seconds=self.dl,
+            door_status=self.drst,
+            
+            # String cast ensures schema consistency across the lakehouse
+            next_stop_id=str(self.stop) if self.stop is not None else None,
+            
             route_id=self.route,
             line_id=self.desi or str(self.line) or "unknown",
             direction_id=int(self.dir) if self.dir else 1,

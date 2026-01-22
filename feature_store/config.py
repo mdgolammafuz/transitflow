@@ -31,18 +31,19 @@ class FeatureStoreConfig(BaseSettings):
     postgres_port: int = 5432
 
     # DBT/Schema Configuration
-    # Principal Fix: Ensuring this matches the dbt project schema
+    # Ensuring this matches the dbt project schema
     postgres_schema: str = "marts"
 
     # API and Service Settings
     cache_ttl_seconds: int = 60
     request_timeout_seconds: float = 2.0  # Increased slightly for spatial joins
 
-    model_config = SettingsConfigDict(
-        env_file=".env", 
-        env_file_encoding="utf-8", 
-        extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @property
+    def postgres_dsn(self) -> str:
+        """Standard PostgreSQL connection string for internal tools."""
+        return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
 
     @classmethod
     def from_env(cls) -> "FeatureStoreConfig":

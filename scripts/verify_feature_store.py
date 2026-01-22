@@ -31,13 +31,9 @@ def check_redis():
 
     try:
         client = redis.Redis(
-            host=host, 
-            port=port, 
-            password=password, 
-            socket_timeout=5,
-            decode_responses=True
+            host=host, port=port, password=password, socket_timeout=5, decode_responses=True
         )
-        
+
         client.ping()
         print(f"  [OK] Connected to Redis at {host}:{port}")
 
@@ -52,11 +48,12 @@ def check_redis():
             print(f"  [OK] Active vehicle features found (sampled): {count}")
         else:
             print("  [WARN] Redis connected, but no vehicle features found. Sync might be pending.")
-            
+
         return True
     except redis.RedisError as e:
         print(f"  [FAIL] Redis error: {e}")
         return False
+
 
 def check_postgres():
     """
@@ -91,17 +88,19 @@ def check_postgres():
                   AND table_name = 'fct_stop_arrivals'
                 """
             )
-            
+
             if cur.fetchone()[0] > 0:
                 print(f"  [OK] {schema}.fct_stop_arrivals table exists")
                 cur.execute(f"SELECT COUNT(*) FROM {schema}.fct_stop_arrivals")
                 row_count = cur.fetchone()[0]
                 print(f"  [OK] Offline features: {row_count} rows")
-                
+
                 # Verify key columns for Phase 6 robustness (historical naming)
-                cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_schema='{schema}' AND table_name='fct_stop_arrivals'")
+                cur.execute(
+                    f"SELECT column_name FROM information_schema.columns WHERE table_schema='{schema}' AND table_name='fct_stop_arrivals'"
+                )
                 cols = [c[0] for c in cur.fetchall()]
-                required = ["historical_avg_delay", "latitude", "longitude"]
+                required = ["historical_avg_delay", "stop_lat", "stop_lon"]
                 for req in required:
                     if req in cols:
                         print(f"  [OK] Required column found: {req}")
@@ -109,7 +108,9 @@ def check_postgres():
                         print(f"  [FAIL] Missing required column: {req}")
                         return False
             else:
-                print(f"  [FAIL] {schema}.fct_stop_arrivals table not found. Did you run make dbt-run?")
+                print(
+                    f"  [FAIL] {schema}.fct_stop_arrivals table not found. Did you run make dbt-run?"
+                )
                 return False
 
         conn.close()
@@ -152,7 +153,7 @@ def check_feature_retrieval(vehicle_id: int):
         print(f"  [OK] Online Available: {data.get('online_available')}")
         print(f"  [OK] Offline Available: {data.get('offline_available')}")
         print(f"  [OK] Latency: {data.get('latency_ms')}ms")
-        
+
         return True
     except URLError as e:
         print(f"  [FAIL] Retrieval failed: {e}")
@@ -172,7 +173,7 @@ def main():
     user = os.environ.get("POSTGRES_USER", "transit")
     password = os.environ.get("POSTGRES_PASSWORD", "")
     dbname = os.environ.get("POSTGRES_DB", "transit")
-    
+
     try:
         conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=dbname)
         with conn.cursor() as cur:
@@ -183,7 +184,7 @@ def main():
                 vehicle_id = res[0]
         conn.close()
     except:
-        pass # Fallback to default ID if DB query fails
+        pass  # Fallback to default ID if DB query fails
 
     print("=" * 50)
     print("FEATURE STORE INTEGRATION VERIFICATION")

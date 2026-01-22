@@ -5,17 +5,14 @@ Hardened: Validates schema alignment with dbt marts and coordinate handling.
 
 import os
 from unittest.mock import MagicMock, patch
-import pytest
+
 
 class TestFeatureStoreConfig:
     """Tests for FeatureStoreConfig initialization and methods."""
 
     def test_config_from_env_defaults(self):
         """Verify default values and required field validation."""
-        env_mock = {
-            "POSTGRES_USER": "test_user",
-            "POSTGRES_PASSWORD": "test_password"
-        }
+        env_mock = {"POSTGRES_USER": "test_user", "POSTGRES_PASSWORD": "test_password"}
         with patch.dict(os.environ, env_mock, clear=True):
             from feature_store.config import FeatureStoreConfig
 
@@ -29,12 +26,13 @@ class TestFeatureStoreConfig:
         from feature_store.config import FeatureStoreConfig
 
         config = FeatureStoreConfig(
-            postgres_host="pg_prod", 
+            postgres_host="pg_prod",
             postgres_user="transit_app",
-            postgres_password="secure_password"
+            postgres_password="secure_password",
         )
-        assert "pg_prod" in config.postgres_dsn()
-        assert "transit_app" in config.postgres_dsn()
+        # Accessing it as a property, not a function call
+        assert "pg_prod" in config.postgres_dsn
+        assert "transit_app" in config.postgres_dsn
 
 
 class TestFeatureVectorConsistency:
@@ -100,7 +98,7 @@ class TestFeatureVectorConsistency:
             stopped_duration_ms=0,
             latitude=60.1699,
             longitude=24.9384,
-            next_stop_id=1010101,
+            next_stop_id="1010101",
             updated_at=1704067200000,
             feature_age_ms=500,
         )
@@ -139,14 +137,12 @@ class TestStoreHealthState:
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_connect.return_value = mock_conn
-        
+
         # This mocks the context manager enter behavior
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
 
         config = FeatureStoreConfig(
-            postgres_user="test", 
-            postgres_password="test", 
-            postgres_schema="marts"
+            postgres_user="test", postgres_password="test", postgres_schema="marts"
         )
         store = OfflineStore(config)
         store.connect()
