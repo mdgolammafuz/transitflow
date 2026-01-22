@@ -29,8 +29,8 @@ public class StopArrival {
     @JsonProperty("dwell_time_ms")
     private Long dwellTimeMs;
 
-    @JsonProperty("door_status")
-    private boolean doorOpened;
+    @JsonProperty("door_status") 
+    private int doorStatus;
 
     @JsonProperty("latitude")
     private double latitude;
@@ -41,7 +41,7 @@ public class StopArrival {
     public StopArrival() {}
 
     public StopArrival(String vehicleId, String stopId, String lineId, int directionId,
-                       long arrivalTime, int delayAtArrival, boolean doorOpened,
+                       long arrivalTime, int delayAtArrival, int doorStatus,
                        double latitude, double longitude) {
         this.vehicleId = vehicleId;
         this.stopId = stopId;
@@ -49,7 +49,7 @@ public class StopArrival {
         this.directionId = directionId;
         this.arrivalTime = arrivalTime;
         this.delayAtArrival = delayAtArrival;
-        this.doorOpened = doorOpened;
+        this.doorStatus = doorStatus; // Aligned with the 0/1 integer contract
         this.latitude = latitude;
         this.longitude = longitude;
     }
@@ -62,7 +62,7 @@ public class StopArrival {
     public long getArrivalTime() { return arrivalTime; }
     public int getDelayAtArrival() { return delayAtArrival; }
     public Long getDwellTimeMs() { return dwellTimeMs; }
-    public boolean getIsDoorOpened() { return doorOpened; }
+    public int getDoorStatus() { return doorStatus; }
     public double getLatitude() { return latitude; }
     public double getLongitude() { return longitude; }
 
