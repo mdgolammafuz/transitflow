@@ -94,7 +94,7 @@ public class VehicleStateFunction
                     pos.getDirectionId(),
                     pos.getEventTimeMs(),
                     pos.getDelaySeconds(),
-                    pos.isDoorOpen(), // Logic uses pos.getDoorStatus() helper
+                    pos.getDoorStatus(), // Logic uses pos.getDoorStatus() helper
                     pos.getLatitude(),
                     pos.getLongitude()
             );
