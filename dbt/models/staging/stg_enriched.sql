@@ -39,7 +39,8 @@ cleaned as (
         -- Metrics
         cast(delay_trend as text) as delay_trend,
         cast(speed_trend as text) as speed_trend,
-        cast(distance_since_last_m as double precision) as distance_since_last_ms,
+        -- Fixed: Explicitly state meters to avoid confusion with time (ms)
+        cast(distance_since_last_m as double precision) as distance_since_last_meters,
         cast(time_since_last_ms as bigint) as time_since_last_ms,
         cast(coalesce(is_stopped, false) as boolean) as is_stopped,
         cast(coalesce(stopped_duration_ms, 0) as bigint) as stopped_duration_ms,

@@ -39,7 +39,7 @@ models:
         data_type: text
       - name: speed_trend
         data_type: text
-      - name: distance_since_last_ms
+      - name: distance_since_last_meters
         data_type: double precision
       - name: time_since_last_ms
         data_type: bigint
