@@ -1,49 +1,47 @@
 """
-Sync Bronze: Lakehouse (MinIO) -> Database (Postgres)
-Final Alignment: Physical Recovery + Column Derivation.
-Principal: Forces creation of event_timestamp to align with dbt staging models.
+Sync Bronze: Delta Lake (MinIO) -> PostgreSQL
+Idempotent: DELETE + INSERT per date partition.
 """
-
 import argparse
 import logging
-import sys
-from pyspark.sql.functions import lit, col, from_unixtime
+import psycopg2
+from pyspark.sql.functions import col
 from spark.config import create_spark_session, load_config
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BronzeSync")
+
 
 def sync_layer(spark, config, table_name, source_path, target_table, date):
     logger.info(f"Syncing {table_name} for {date}...")
+    
     try:
-        # Inject S3A credentials explicitly
-        h_conf = spark.sparkContext._jsc.hadoopConfiguration()
-        h_conf.set("fs.s3a.access.key", config.minio_access_key)
-        h_conf.set("fs.s3a.secret.key", config.minio_secret_key)
-        h_conf.set("fs.s3a.endpoint", config.minio_endpoint)
-        h_conf.set("fs.s3a.path.style.access", "true")
-        h_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        # 1. Read from Delta Lake (not raw Parquet)
+        df = spark.read.format("delta").load(source_path).filter(col("date") == date)
+        count = df.count()
+        logger.info(f"Read {count} records from Delta Lake")
+        
+        if count == 0:
+            logger.warning(f"No data for {date}, skipping")
+            return
 
-        # 1. Physical Read from MinIO
-        partition_path = f"{source_path}/date={date}"
-        df = spark.read.format("parquet").load(partition_path)
+        # 2. Delete existing data for this date in Postgres
+        conn = psycopg2.connect(
+            host=config.postgres_host,
+            port=config.postgres_port,
+            database=config.postgres_db,
+            user=config.postgres_user,
+            password=config.postgres_password
+        )
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM {target_table} WHERE date = %s", (date,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Deleted {deleted} existing records for {date}")
 
-        # 2. SURGICAL COLUMN ALIGNMENT
-        # Standardize: Drop ghost 'timestamp', derive 'event_timestamp'
-        if "timestamp" in df.columns:
-            df = df.drop("timestamp")
-
-        if table_name == "Telemetry":
-            # This creates the exact column dbt is looking for
-            df = df.withColumn("event_timestamp", (col("event_time_ms") / 1000).cast("timestamp"))
-        elif table_name == "StopEvents":
-            df = df.withColumn("arrival_timestamp", (col("arrival_time") / 1000).cast("timestamp"))
-
-        # Add partition date back
-        df = df.withColumn("date", lit(date).cast("date"))
-
-        # 3. Write to Postgres (Recreation Mode)
-        logger.info(f"Pouring {df.count()} records into {target_table}...")
+        # 3. Insert fresh data from Delta Lake
         df.write \
             .format("jdbc") \
             .option("url", config.postgres_jdbc_url) \
@@ -51,14 +49,15 @@ def sync_layer(spark, config, table_name, source_path, target_table, date):
             .option("user", config.postgres_user) \
             .option("password", config.postgres_password) \
             .option("driver", "org.postgresql.Driver") \
-            .mode("overwrite") \
+            .mode("append") \
             .save()
-            
-        logger.info(f"SUCCESS: {target_table} is now physically aligned and typed.")
+        
+        logger.info(f"SUCCESS: {target_table} synced {count} records for {date}")
 
     except Exception as e:
-        logger.error(f"CRITICAL FAILURE on {table_name}: {e}")
-        sys.exit(1)
+        logger.error(f"FAILURE on {table_name}: {e}")
+        raise
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -68,10 +67,11 @@ def main():
     config = load_config()
     spark = create_spark_session("TransitFlow-BronzeSync")
 
-    sync_layer(spark, config, "Telemetry", f"{config.bronze_path}/enriched", "bronze.enriched", args.date)
+    sync_layer(spark, config, "Enriched", f"{config.bronze_path}/enriched", "bronze.enriched", args.date)
     sync_layer(spark, config, "StopEvents", f"{config.bronze_path}/stop_events", "bronze.stop_events", args.date)
 
     spark.stop()
+
 
 if __name__ == "__main__":
     main()

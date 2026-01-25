@@ -12,7 +12,7 @@ from typing import Optional
 
 from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.functions import avg, col, count, dayofweek, hour, when, from_utc_timestamp
+from pyspark.sql.functions import avg, col, count, dayofweek, hour, when, from_utc_timestamp, trim
 from pyspark.sql.functions import round as spark_round
 from pyspark.sql.functions import sum as spark_sum
 
@@ -41,6 +41,12 @@ def write_to_postgres(df: DataFrame, table_name: str, config):
     Methodical: Uses truncate=true to empty the table without dropping it,
     preserving downstream dbt view dependencies.
     """
+    h_conf = df.sparkSession.sparkContext._jsc.hadoopConfiguration()
+    h_conf.set("fs.s3a.access.key", config.minio_access_key)
+    h_conf.set("fs.s3a.secret.key", config.minio_secret_key)
+    h_conf.set("fs.s3a.endpoint", config.minio_endpoint)
+    h_conf.set("fs.s3a.path.style.access", "true")
+    h_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
     logger.info(f"Syncing {table_name} to Postgres Marts (Truncate Mode)...")
     try:
         df.write \
@@ -67,15 +73,24 @@ def aggregate_daily_metrics(spark: SparkSession, config, target_date: str):
     validate_source(spark, silver_path, "Silver Enriched")
     
     try:
-        # STRICT: Filter source by the mandatory target date
+        # Filter source by the mandatory target date
         silver_df = spark.read.format("delta").load(silver_path).filter(col("date") == target_date)
 
+        # Create delay_category on the fly before aggregation
+        processed_df = silver_df.withColumn(
+            "delay_category",
+            when(col("delay_seconds") <= 60, "on_time")
+            .when(col("delay_seconds") <= 300, "minor_delay")
+            .otherwise("major_delay")
+        )
+
         daily_df = (
-            silver_df.groupBy("line_id", "date")
+            processed_df.groupBy("line_id", "date")
             .agg(
                 count("*").alias("total_events"),
                 spark_round(avg("delay_seconds"), 2).alias("avg_delay_seconds"),
                 spark_round(avg("speed_kmh"), 2).alias("avg_speed_kmh"),
+                spark_round(avg("door_status"), 4).alias("door_open_rate"),
                 spark_sum(when(col("delay_category") == "on_time", 1).otherwise(0)).alias(
                     "on_time_count"
                 ),
@@ -112,7 +127,7 @@ def aggregate_hourly_metrics(spark: SparkSession, config, target_date: str):
         silver_df = spark.read.format("delta").load(silver_path).filter(col("date") == target_date)
 
         hourly_df = (
-            silver_df.withColumn("local_time", from_utc_timestamp(col("event_timestamp"), "Europe/Helsinki"))
+            silver_df.withColumn("local_time", from_utc_timestamp(col("timestamp"), "Europe/Helsinki"))
             .withColumn("hour_val", hour("local_time"))
             .groupBy("line_id", "date", "hour_val")
             .agg(
@@ -128,10 +143,10 @@ def aggregate_hourly_metrics(spark: SparkSession, config, target_date: str):
     except Exception as e:
         logger.error(f"Gold Hourly Aggregation failed: {e}")
 
+
 def aggregate_stop_performance(spark: SparkSession, config, target_date: str):
     """
     Aggregate stop events for ML feature engineering with coordinate enrichment.
-    Hardening: Forced String casting for stop_id and 'how=left' join to prevent data loss.
     """
     silver_path = f"{config.silver_path}/stop_events"
     metadata_path = f"{config.gold_path}/stops" 
@@ -141,19 +156,21 @@ def aggregate_stop_performance(spark: SparkSession, config, target_date: str):
     validate_source(spark, metadata_path, "Gold Stop Metadata")
     
     try:
-        # 1. Load and Cast: Forced string types to resolve join mismatches
+        # 1. Load and Cast
         silver_df = spark.read.format("delta").load(silver_path) \
             .filter(col("date") == target_date) \
-            .withColumn("stop_id", col("stop_id").cast("string"))
-
+            .withColumn("stop_id", trim(col("stop_id").cast("string"))) 
+            
         stops_metadata = spark.read.format("delta").load(metadata_path) \
             .select(
-                col("stop_id").cast("string"),
-                col("stop_lat").alias("latitude"),
-                col("stop_lon").alias("longitude")
+                trim(col("stop_id").cast("string")).alias("stop_id"),
+                col("latitude"),
+                col("longitude"),
+                col("stop_name") # Added stop_name for the final report
             )
 
         # 2. Process Metrics (UTC to Helsinki Shift)
+        # FIX: Using 'delay_at_arrival' as confirmed by your error log
         stop_metrics = (
             silver_df.withColumn("local_time", from_utc_timestamp(col("arrival_timestamp"), "Europe/Helsinki"))
             .withColumn("hour_of_day", hour("local_time"))
@@ -162,20 +179,14 @@ def aggregate_stop_performance(spark: SparkSession, config, target_date: str):
             .agg(
                 count("*").alias("historical_arrival_count"),
                 spark_round(avg("delay_at_arrival"), 2).alias("historical_avg_delay"),
-                spark_round(avg("dwell_time_ms"), 0).alias("avg_dwell_time_ms"),
+                spark_round(avg("dwell_time_ms"), 0).alias("avg_dwell_time_ms")
             )
         )
 
-        # 3. Resilient Join: 'left' ensures we keep arrivals even if metadata is missing
-        # 
+        # 3. Resilient Join
         enriched_stop_df = stop_metrics.join(stops_metadata, on="stop_id", how="left")
 
-        # 4. Audit Check: Log if any records are missing GPS data
-        missing_gps_count = enriched_stop_df.filter(col("latitude").isNull()).count()
-        if missing_gps_count > 0:
-            logger.warning(f"LEAKAGE DETECTED: {missing_gps_count} arrivals have no matching metadata.")
-
-        # 5. Sync to Lakehouse and Postgres
+        # 4. Sync
         enriched_stop_df.write.format("delta") \
             .mode("overwrite") \
             .option("overwriteSchema", "true") \
@@ -192,7 +203,7 @@ def aggregate_stop_performance(spark: SparkSession, config, target_date: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--table", choices=["daily", "hourly", "stops", "all"], default="all")
-    # Robustness: date is now required for OCI/Cron stability
+    # date is now required for OCI/Cron stability
     parser.add_argument("--date", type=str, required=True, help="Processing date (YYYY-MM-DD)")
     args = parser.parse_args()
 
