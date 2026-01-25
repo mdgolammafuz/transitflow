@@ -54,7 +54,7 @@ public class RedisSink extends RichSinkFunction<EnrichedEvent> {
         features.put("speed_trend", String.format("%.4f", event.getSpeedTrend()));
         features.put("delay_trend", String.format("%.4f", event.getDelayTrend()));
         features.put("door_status", String.valueOf(event.getDoorStatus()));
-        features.put("is_stopped", event.getIsStopped() ? "1" : "0");
+        features.put("is_stopped", String.valueOf(event.getIsStopped()));
         features.put("updated_at", String.valueOf(event.getEventTimeMs()));
         features.put("latitude", String.valueOf(event.getLatitude()));
         features.put("longitude", String.valueOf(event.getLongitude()));
