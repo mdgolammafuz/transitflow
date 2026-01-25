@@ -70,6 +70,7 @@ models:
         data_type: integer
       - name: kafka_offset
         data_type: bigint
+      
     data_tests:
       # Guaranteed unique via Kafka markers.
       - dbt_utils.unique_combination_of_columns:
@@ -105,4 +106,6 @@ models:
       - name: on_time_percentage
         data_type: double precision
       - name: total_distance_km
+        data_type: double precision
+      - name: avg_speed_kmh
         data_type: double precision
