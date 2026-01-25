@@ -134,7 +134,6 @@ services:
     user: root
     environment:
       <<: *app-env
-      # Explicit Network Overrides
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
       REDIS_HOST: "redis"
       POSTGRES_HOST: "postgres"
@@ -144,16 +143,17 @@ services:
       PYTHONPATH: /opt/spark/jobs
       MLFLOW_TRACKING_URI: http://mlflow:5000
     command: >
-      /bin/bash -c "
-      pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny && 
-      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
-      "
+      /bin/bash -c "pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny pytest pytest-spark python-dotenv pydantic pydantic-settings fastavro && /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master"
     volumes:
       - ../../spark:/opt/spark/jobs/spark
       - ../../feature_store:/opt/spark/jobs/feature_store
       - ../../src:/opt/spark/jobs/src
       - ../../scripts:/opt/spark/jobs/scripts
       - ../../ml_pipeline:/opt/spark/jobs/ml_pipeline
+      - ../../tests:/opt/spark/jobs/tests
+      - ../../infra:/opt/spark/jobs/infra
+      - ../../dbt:/opt/spark/jobs/dbt
+      - ../../serving:/opt/spark/jobs/serving
     ports:
       - "7077:7077"
       - "8083:8080"
@@ -166,7 +166,6 @@ services:
     user: root
     environment:
       <<: *app-env
-      # Explicit Network Overrides
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
       REDIS_HOST: "redis"
       POSTGRES_HOST: "postgres"
@@ -178,16 +177,17 @@ services:
       PYTHONPATH: /opt/spark/jobs
       MLFLOW_TRACKING_URI: http://mlflow:5000
     command: >
-      /bin/bash -c "
-      pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny && 
-      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
-      "
+      /bin/bash -c "pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny python-dotenv pydantic pydantic-settings fastavro && /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077"
     volumes:
       - ../../spark:/opt/spark/jobs/spark
       - ../../feature_store:/opt/spark/jobs/feature_store
       - ../../src:/opt/spark/jobs/src
       - ../../scripts:/opt/spark/jobs/scripts
       - ../../ml_pipeline:/opt/spark/jobs/ml_pipeline
+      - ../../tests:/opt/spark/jobs/tests
+      - ../../infra:/opt/spark/jobs/infra
+      - ../../dbt:/opt/spark/jobs/dbt
+      - ../../serving:/opt/spark/jobs/serving
     depends_on:
       - spark-master
       - mlflow
