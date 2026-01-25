@@ -2,8 +2,8 @@
 
 /*
     Dimension: Stops (SCD Type 2 + Dynamic Discovery)
-    Principal Logic: Merges Snapshots, Seeds, and Telemetry to ensure 100% coverage.
-    Hardening: Telemetry-driven discovery fills gaps in static seed data.
+    Principal Logic: Merges Snapshots (which contain Seeds) and Telemetry.
+    Hardening: Removed redundant Seed union to prevent duplicate active keys.
 */
 
 {{ config(
@@ -20,6 +20,7 @@ with snapshot_source as (
     {% if snapshot_relation %}
         select * from {{ ref('dim_stops_snapshot') }}
     {% else %}
+        -- Fallback schema if snapshot hasn't run yet
         select 
             null::text as stop_id, 
             null::text as stop_name, 
@@ -33,14 +34,8 @@ with snapshot_source as (
     {% endif %}
 ),
 
-seed_source as (
-    -- Static reference data
-    select * from {{ ref('seed_stops') }}
-),
-
 telemetry_discovery as (
     -- DYNAMIC DISCOVERY: Extract unique stops seen in real telemetry
-    -- This handles the 90,561 records truth
     select 
         next_stop_id as stop_id,
         avg(latitude) as discovered_lat,
@@ -51,7 +46,7 @@ telemetry_discovery as (
 ),
 
 unioned_data as (
-    -- 1. Existing Snapshot History
+    -- 1. Existing Snapshot History (Includes Seeds implicitly)
     select
         trim(cast(stop_id as text)) as stop_id,
         stop_name,
@@ -67,25 +62,7 @@ unioned_data as (
 
     union all
 
-    -- 2. Seed Data (Metadata for known stops)
-    select 
-        trim(cast(stop_id as text)) as stop_id,
-        stop_name,
-        stop_lat,
-        stop_lon,
-        zone_id,
-        stop_code,
-        cast('1970-01-01' as timestamp) as valid_from,
-        cast('{{ var("scd_end_date") }}' as timestamp) as valid_to,
-        true as is_current
-    from seed_source
-    where trim(cast(stop_id as text)) not in (
-        select coalesce(trim(cast(stop_id as text)), 'N/A') from snapshot_source
-    )
-
-    union all
-
-    -- 3. Discovery Data (Fallback for stops missing from seeds/snapshots)
+    -- 2. Discovery Data (Fallback ONLY for stops truly missing from Snapshot)
     select
         trim(cast(td.stop_id as text)) as stop_id,
         'Discovered: ' || td.stop_id as stop_name,
@@ -98,9 +75,7 @@ unioned_data as (
         true as is_current
     from telemetry_discovery td
     where trim(cast(td.stop_id as text)) not in (
-        select trim(cast(stop_id as text)) from snapshot_source
-        union
-        select trim(cast(stop_id as text)) from seed_source
+        select coalesce(trim(cast(stop_id as text)), 'N/A') from snapshot_source
     )
 ),
 

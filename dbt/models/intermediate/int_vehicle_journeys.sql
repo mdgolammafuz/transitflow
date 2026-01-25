@@ -42,8 +42,9 @@ journeys as (
         end) as early_count, -- Logic follows your provided sums
         
         avg(speed_kmh) as avg_speed_kmh,
-        sum(coalesce(distance_since_last_ms, 0)) as total_distance_units
-        
+
+        -- Fixed: Aligned with stg_enriched "meters" naming
+        sum(coalesce(distance_since_last_meters, 0)) as total_distance_units
     from enriched
     group by vehicle_id, ingestion_time, line_id, operator_id
 ),
