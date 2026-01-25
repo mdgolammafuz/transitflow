@@ -2,7 +2,6 @@
 """
 Pipeline Integrity Verification Utility
 Hardened for Phase 4: No Renaming & UTC Lock Enforcement.
-All original logic restored and corrected.
 """
 
 import argparse
@@ -22,7 +21,7 @@ PROJECT_ROOT = SCRIPT_PATH.parent.parent
 ENV_PATH = PROJECT_ROOT / "infra" / "local" / ".env"
 DBT_DIR = PROJECT_ROOT / "dbt"
 
-# Pre-load environment into the master process
+# Pre-load environment
 load_dotenv(dotenv_path=ENV_PATH)
 
 def check_schema_registry():
@@ -32,51 +31,32 @@ def check_schema_registry():
         print("  [FAIL] SCHEMA_REGISTRY_URL not set")
         return False
 
-    # Aligned with our folder names and Phase 3 Spark Sinks
     expected = ["vehicle_position-value", "enriched_event-value", "stop_event-value"]
 
     try:
         response = urlopen(f"{registry_url.rstrip('/')}/subjects", timeout=5)
         subjects = json.loads(response.read().decode())
 
-        # Manual registration logic but with CORRECT column names
+        all_found = True
         for schema in expected:
             if schema not in subjects:
-                print(f"  [AUTO] Priming missing contract: {schema}")
-                field_name = "stop_id" if "stop" in schema else "vehicle_id"
-                payload = {
-                    "schema": json.dumps(
-                        {
-                            "type": "record",
-                            "name": schema.replace("-value", ""),
-                            "fields": [{"name": field_name, "type": "string"}],
-                        }
-                    )
-                }
-                req_url = f"{registry_url.rstrip('/')}/subjects/{schema}/versions"
-                import urllib.request
-
-                req = urllib.request.Request(
-                    req_url,
-                    data=json.dumps(payload).encode(),
-                    headers={"Content-Type": "application/vnd.schemaregistry.v1+json"},
-                )
-                urlopen(req, timeout=5)
-
-        print("  [PASS] All contracts active (auto-primed with Phase 4 identifiers)")
-        return True
+                print(f"  [FAIL] Missing contract: {schema}")
+                all_found = False
+            else:
+                print(f"  [PASS] Contract active: {schema}")
+        
+        if not all_found:
+            print("  [INFO] Tip: Run 'python scripts/register_schemas.py' to fix.")
+        
+        return all_found
 
     except URLError as e:
         print(f"  [FAIL] Connection refused. Is Redpanda running? {e}")
         return False
 
 def run_dbt_command(command_list, label):
-    """
-    Utility to execute dbt tasks with explicit environment injection.
-    """
     try:
         env_context = os.environ.copy()
-        # Absolute pathing for profiles to ensure UTC Lock is found
         env_context["DBT_PROFILES_DIR"] = str(DBT_DIR)
 
         result = subprocess.run(
@@ -85,18 +65,15 @@ def run_dbt_command(command_list, label):
             capture_output=True,
             text=True,
             env=env_context,
-            timeout=300, # Handled 90k+ record processing time
+            timeout=300,
         )
 
         success = result.returncode == 0
         status_symbol = "PASS" if success else "FAIL"
         print(f"  [{status_symbol}] {label}")
 
-        # Full Error Context for debugging SQL or Contract failures
         if not success:
-            print(
-                f"    Error Context: {result.stdout.strip() if result.stdout else result.stderr.strip()}"
-            )
+            print(f"    Error Context: {result.stdout.strip() if result.stdout else result.stderr.strip()}")
         return success
     except Exception as e:
         print(f"  [SYSTEM ERROR] {label}: {str(e)}")
@@ -109,8 +86,6 @@ def main():
 
     print("=" * 60)
     print("PIPELINE INTEGRITY VERIFICATION")
-    print(f"Project Root: {PROJECT_ROOT}")
-    print(f"Env Loaded:   {ENV_PATH}")
     print("=" * 60)
 
     results = {}
@@ -118,33 +93,20 @@ def main():
     if args.check_all:
         time.sleep(2)
 
-    # 1. External dependency check
     results["registry"] = check_schema_registry()
-
-    # 2. Connection check
     results["dbt_connect"] = run_dbt_command(["debug"], "dbt Connectivity")
 
     if results["dbt_connect"]:
-        # 3. Reference Data
         results["seeds"] = run_dbt_command(["seed"], "Static Seed Loading")
-
-        # 4. Staging Layer
         results["staging"] = run_dbt_command(["run", "--select", "staging.*"], "Staging Layer")
-
-        # 5. History (SCD Type 2)
         results["snapshots"] = run_dbt_command(["snapshot"], "Snapshot Processing")
-
-        # 6. Gold Layer (Marts & Dimensions)
-        results["models"] = run_dbt_command(["run"], "Warehouse Transformations")
-
-        # 7. Quality Contracts (The 90,513 record verification)
+        results["models"] = run_dbt_command(["run", "--exclude", "staging.*"], "Warehouse Transformations")
         results["tests"] = run_dbt_command(["test"], "Data Quality Validation")
 
     print("\n" + "=" * 60)
     print("VERIFICATION SUMMARY")
     print("=" * 60)
 
-    # RESTORED: Full Summary Counter logic
     order = ["registry", "dbt_connect", "seeds", "staging", "snapshots", "models", "tests"]
     passed_count = 0
     total_found = 0
