@@ -1,16 +1,15 @@
 .PHONY: help dev-up dev-down clean topics setup-test lint test-unit test-all \
-        verify-pipeline run run-full flink-build flink-submit \
-        spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
-        dbt-run dbt-test dbt-docs schema-register schema-check schema-list \
-        feature-api feature-sync feature-verify feature-test \
-        serving-api train-model serving-verify serving-test lakehouse-ls metadata-init
+	      verify-pipeline run run-full flink-build flink-submit \
+	      spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
+	      dbt-run dbt-test dbt-docs schema-register schema-check schema-list \
+	      feature-api feature-sync feature-verify feature-test \
+	      serving-api train-model serving-verify serving-test lakehouse-ls metadata-init
 
 # --- Configuration ---
 # Loads credentials and service names from infra/local/.env
 -include infra/local/.env
-# Aligned: Target date for manual verification and OCI Cron context
-DATE ?= 2026-01-18
-
+# Target date for manual verification and OCI Cron context
+DATE ?= $(shell date +%Y-%m-%d)
 # Local connectivity constants
 REGISTRY_URL := $(if $(SCHEMA_REGISTRY_URL),$(SCHEMA_REGISTRY_URL),http://localhost:8081)
 SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.6.0"
@@ -19,26 +18,26 @@ SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-
 
 # LOCAL_ENV: For tools running directly on your Mac (dbt, API, Scripts, Serving)
 LOCAL_ENV := POSTGRES_USER=$(POSTGRES_USER) \
-             POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
-             POSTGRES_DB=$(POSTGRES_DB) \
-             POSTGRES_HOST=127.0.0.1 \
-             POSTGRES_PORT=$(POSTGRES_PORT) \
-             POSTGRES_SCHEMA=marts \
-             REDIS_HOST=127.0.0.1 \
-             REDIS_PORT=$(REDIS_PORT) \
-             REDIS_PASSWORD=$(REDIS_PASSWORD) \
-             SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
-             FEATURE_API_URL=http://localhost:8000 \
-             SERVING_API_URL=http://localhost:8001 \
-             OTLP_ENDPOINT=http://localhost:4317
+	           POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	           POSTGRES_DB=$(POSTGRES_DB) \
+	           POSTGRES_HOST=127.0.0.1 \
+	           POSTGRES_PORT=$(POSTGRES_PORT) \
+	           POSTGRES_SCHEMA=marts \
+	           REDIS_HOST=127.0.0.1 \
+	           REDIS_PORT=$(REDIS_PORT) \
+	           REDIS_PASSWORD=$(REDIS_PASSWORD) \
+	           SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
+	           FEATURE_API_URL=http://localhost:8000 \
+	           SERVING_API_URL=http://localhost:8001 \
+	           OTLP_ENDPOINT=http://localhost:4317
 
 # DB_ENV: For tools running inside Docker (Spark)
 DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
-          POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
-          POSTGRES_DB=$(POSTGRES_DB) \
-          POSTGRES_HOST=$(POSTGRES_HOST) \
-          POSTGRES_PORT=$(POSTGRES_PORT) \
-          SCHEMA_REGISTRY_URL=$(REGISTRY_URL)
+	        POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	        POSTGRES_DB=$(POSTGRES_DB) \
+	        POSTGRES_HOST=$(POSTGRES_HOST) \
+	        POSTGRES_PORT=$(POSTGRES_PORT) \
+	        SCHEMA_REGISTRY_URL=$(REGISTRY_URL)
 
 # dbt execution context (Mac-based)
 DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
@@ -47,16 +46,25 @@ DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
 # Explicitly overrides HOST environment variables for the internal Docker network context.
 # This prevents 'Connection Refused' by ensuring Spark looks for 'minio' and 'postgres' containers, not itself.
 SPARK_SUBMIT := docker exec -it --env-file infra/local/.env \
-  -e KAFKA_BOOTSTRAP_SERVERS=redpanda:29092 \
-  -e POSTGRES_HOST=postgres \
-  -e MINIO_ENDPOINT=http://minio:9000 \
-  spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --conf spark.driver.host=spark-master \
-  --total-executor-cores 1 \
-  --executor-memory 2G \
-  --driver-memory 1G \
-  --packages $(SPARK_PKGS)
+	-e KAFKA_BOOTSTRAP_SERVERS=redpanda:29092 \
+	-e POSTGRES_HOST=postgres \
+	-e MINIO_ENDPOINT=http://minio:9000 \
+	spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
+	--master spark://spark-master:7077 \
+	--conf spark.driver.host=spark-master \
+	--total-executor-cores 1 \
+	--executor-memory 2G \
+	--driver-memory 1G \
+	--packages $(SPARK_PKGS)
+
+# --- The Clean S3A Bridge ---
+# We use the variable names as they appear inside our .env/container
+S3A_CONF := --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+	          --conf spark.hadoop.fs.s3a.access.key=$${MINIO_ROOT_USER} \
+	          --conf spark.hadoop.fs.s3a.secret.key=$${MINIO_ROOT_PASSWORD} \
+	          --conf spark.hadoop.fs.s3a.path.style.access=true \
+	          --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+	          --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false
 
 help:
 	@echo "TransitFlow - Unified Pipeline Control"
@@ -177,72 +185,49 @@ flink-deploy: flink-build flink-stop flink-submit
 # Submit the job to the JobManager
 flink-submit:
 	docker exec -it flink-jobmanager flink run -d /opt/flink/jobs/transitflow-flink-1.0.0.jar
-	
+
 # --- Delta Lake Processing (Spark) ---
 
-# 1. Kafka to MinIO (Continuous Delta Lake Stream)
+# 1. Kafka to MinIO (Streaming)
 spark-bronze:
+	@echo "Starting Streaming Bronze Writer..."
 	$(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all
 
 # 2. MinIO to Postgres (The Bridge)
-# Methodical: Pulls the records from Delta Lake into Postgres Bronze tables.
-# Optimized: Uses master local[*] and explicit S3A configs to ensure high-speed JDBC transfer.
 spark-sync:
-	@echo "Syncing Lakehouse (MinIO) to Postgres Bronze Layer for $(DATE)..."
-	$(SPARK_SUBMIT) \
-		--master "local[*]" \
-		--conf spark.driver.host=localhost \
-		--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
-		--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
-		--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
-		--conf spark.hadoop.fs.s3a.path.style.access=true \
-		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
-		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
-		/opt/spark/jobs/spark/sync_bronze_to_postgres.py --date $(DATE)
+	@echo "Syncing Lakehouse (MinIO) to Postgres Bronze for $(DATE)..."
+	$(SPARK_SUBMIT) $(S3A_CONF) /opt/spark/jobs/spark/sync_bronze_to_postgres.py --date $(DATE)
 
 # 3. Bronze to Silver (Cleaning)
-# Methodical: Now depends on spark-sync to ensure Postgres is hydrated before processing.
-spark-silver: spark-sync
-	$(SPARK_SUBMIT) /opt/spark/jobs/spark/silver_transform.py --date $(DATE)
+spark-silver:
+	@echo "Transforming Bronze to Silver for $(DATE)..."
+	$(SPARK_SUBMIT) $(S3A_CONF) /opt/spark/jobs/spark/silver_transform.py --date $(DATE)
 
-# 4. Initialize Metadata (Coordinates)
-# Methodical: Ensures metadata is initialized before attempting gold aggregation
-# Explicitly sets MinIO endpoint to the container address for Spark context
+# 4. Initialize Metadata
 metadata-init:
 	@echo "Initializing Gold Metadata Layer from Postgres..."
-	$(SPARK_SUBMIT) \
-		--master "local[*]" \
-		--conf spark.driver.host=localhost \
-		--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
-		--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
-		--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
-		--conf spark.hadoop.fs.s3a.path.style.access=true \
-		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
-		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
-		/opt/spark/jobs/spark/initialize_metadata.py
+	$(SPARK_SUBMIT) $(S3A_CONF) /opt/spark/jobs/spark/initialize_metadata.py
 
 # 5. Silver to Gold (Aggregation)
-# Optimized: Uses master local[*] with explicit S3A configs to bypass cluster auth issues
-# Methodical: Depends on metadata-init to prevent hangs on missing paths
-spark-gold: metadata-init
+spark-gold:
 	@echo "Running Gold Aggregations for $(DATE) ..."
-	$(SPARK_SUBMIT) \
-		--master "local[*]" \
-		--conf spark.driver.host=localhost \
-		--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
-		--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
-		--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
-		--conf spark.hadoop.fs.s3a.path.style.access=true \
-		--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
-		--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
-		/opt/spark/jobs/spark/gold_aggregation.py --date $(DATE)
+	$(SPARK_SUBMIT) $(S3A_CONF) /opt/spark/jobs/spark/gold_aggregation.py --date $(DATE)
 
+# 6. Quality & Maintenance
 spark-reconcile:
-	$(SPARK_SUBMIT) /opt/spark/jobs/spark/reconciliation.py --date $(DATE) --save
+	@echo "Running Reconciliation for $(DATE)..."
+	$(SPARK_SUBMIT) $(S3A_CONF) /opt/spark/jobs/spark/reconciliation.py --date $(DATE) --save
 
 spark-maintenance:
-	$(SPARK_SUBMIT) /opt/spark/jobs/spark/maintenance.py --date $(DATE) --action all
+	@echo "Running Lakehouse Maintenance for $(DATE)..."
+	$(SPARK_SUBMIT) $(S3A_CONF) /opt/spark/jobs/spark/maintenance.py --date $(DATE) --action all
+	  
+# 7. Targeted Unit Tests
+spark-test:
+	@echo "Running Spark Unit Tests inside container..."
+	docker exec -it spark-master /usr/local/bin/pytest /opt/spark/jobs/tests/unit/spark/
 
+# --- Data Contracts & Warehouse (dbt) ---
 # --- Data Contracts & Warehouse (dbt) ---
 
 # Variable for date-partitioned runs (e.g., make dbt-run DATE=2026-01-18)
@@ -265,16 +250,26 @@ DBT_ENV = cd dbt && DBT_PROFILES_DIR=. \
 	SERVING_API_URL=$(SERVING_API_URL) \
 	OTLP_ENDPOINT=$(OTLP_ENDPOINT)
 
+# --- Quality Gates (Contracts & Registry) ---
+
+# 1. Unit Tests (Code Logic for Registry & dbt Contracts)
+test-contracts:
+	@echo "Running Contract Unit Tests..."
+	PYTHONPATH=$(CURDIR) pytest tests/unit/schema_registry/ tests/unit/dbt/ -v
+
+# 2. Schema Registry Controls
 schema-register:
 	@echo "Registering Avro definitions..."
-	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/register_schemas.py
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/register_schemas.py --schema-dir schemas/avro
 
 schema-check:
 	@echo "Performing compatibility check..."
-	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/register_schemas.py --check-only
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/register_schemas.py --schema-dir schemas/avro --check-only
 
 schema-list:
 	@curl -s $(REGISTRY_URL)/subjects | python3 -m json.tool
+
+# --- dbt Execution ---
 
 dbt-deps:
 	$(DBT_ENV) dbt deps
@@ -300,9 +295,26 @@ dbt-docs:
 	$(DBT_ENV) dbt docs generate
 	@echo "Serving documentation at http://localhost:8085"
 	$(DBT_ENV) dbt docs serve --port 8085
+
+# --- Orchestrated Verification ---
+
+# Verifies Spark, MinIO, and Delta Parquet files (Storage Layer)
+# REQUIRES DATE: Checks for existence of specific partitions
+verify-lakehouse:
+	@echo "Verifying Lakehouse Storage layers for $(DATE)..."
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_lakehouse.py --date $(DATE)
+
+# Verifies Schema Registry, dbt connectivity, and Model integrity (Logic Layer)
+# NO DATE NEEDED: Checks system configuration and contracts
+verify-pipeline:
+	@echo "Verifying Pipeline Integrity..."
+	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_pipeline.py --check-all
 	
-# Ensure DATE defaults to today if not provided via 'make feature-sync DATE=...'
-DATE ?= $(shell date +%Y-%m-%d)
+# --- Storage & Lakehouse Utilities ---
+lakehouse-ls:
+	@docker exec -it minio /usr/bin/mc alias set myminio http://localhost:9000 $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) > /dev/null
+	@docker exec -it minio /usr/bin/mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
+
 
 # --- Feature Store & ML Serving ---
 feature-api:
@@ -340,16 +352,6 @@ serving-verify:
 
 serving-test:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/ml_pipeline/ tests/unit/serving/ -v
-
-# --- Orchestrated Verification ---
-verify-pipeline:
-	@echo "Verifying integrity for $(DATE)..."
-	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_lakehouse.py --date $(DATE)
-
-# --- Storage & Lakehouse Utilities ---
-lakehouse-ls:
-	@docker exec -it minio /usr/bin/mc alias set myminio http://localhost:9000 $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) > /dev/null
-	@docker exec -it minio /usr/bin/mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
 	
 # --- Maintenance ---
 clean:
