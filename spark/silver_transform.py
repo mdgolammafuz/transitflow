@@ -2,11 +2,10 @@
 Silver Transform: Bronze -> Silver (Batch)
 Transforms raw Bronze data into cleaned, deduplicated Silver layer.
 
-Optimized for 8GB RAM environments:
-- Removed expensive RDD isEmpty() calls
-- Streamlined window functions
-- Uses inter-batch deduplication via Delta Merge
-- Aligned: Explicit UTC timestamp casting to prevent timezone leaks.
+- Resilient: Uses recursiveFileLookup to handle nested Parquet-as-folder structures.
+- Deduplicated: Employs Window functions to keep only the latest offset per event.
+- Aligned: Maintains 'timestamp' naming for Gold joins and 'arrival_timestamp' for events.
+- Fail-Fast: Explicit sys.exit(1) if source data is missing to prevent ghost writes.
 """
 
 import argparse
@@ -15,14 +14,16 @@ import sys
 
 from delta.tables import DeltaTable
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import abs as spark_abs
-from pyspark.sql.functions import col, row_number, when
+from pyspark.sql.functions import col, row_number, when, lit
 from pyspark.sql.window import Window
 
 # Absolute import for package consistency
 from spark.config import create_spark_session, load_config
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 def transform_enriched(spark: SparkSession, config, process_date: str):
@@ -31,36 +32,45 @@ def transform_enriched(spark: SparkSession, config, process_date: str):
     silver_path = f"{config.silver_path}/enriched"
 
     try:
-        # Check if Delta metadata exists, if not, read as Parquet partition
-        from delta.tables import DeltaTable
-        if DeltaTable.isDeltaTable(spark, bronze_path):
-            bronze_df = spark.read.format("delta").load(bronze_path).filter(col("date") == process_date)
-        else:
-            # Fallback to physical partition if metadata is still missing
-            bronze_df = spark.read.format("parquet").load(f"{bronze_path}/date={process_date}") \
-                        .withColumn("date", lit(process_date).cast("date"))
+        logger.info(f"Reading raw enriched Delta data from {bronze_path}/date={process_date}")
+        
+        bronze_df = spark.read.format("delta") \
+            .load(bronze_path) \
+            .filter(col("date") == process_date)
+        
+        if bronze_df.count() == 0:
+            logger.error(f"FATAL: No enriched data found for {process_date} at {bronze_path}")
+            sys.exit(1)
 
         window = Window.partitionBy("vehicle_id", "event_time_ms").orderBy(col("kafka_offset").desc())
 
         silver_df = (
             bronze_df.withColumn("row_num", row_number().over(window))
             .filter(col("row_num") == 1)
-            .drop("row_num", "timestamp") # Drop ghost column
+            .drop("row_num") 
             .filter(col("latitude").isNotNull() & col("longitude").isNotNull())
-            .withColumn("door_status", col("door_status").cast("boolean"))
-            .withColumn("event_timestamp", 
-                when(col("event_timestamp").isNotNull(), col("event_timestamp"))
+            # ALIGNMENT: Ensuring types match the expectations of gold_aggregation.py
+            .withColumn("door_status", col("door_status").cast("integer"))
+            .withColumn("delay_seconds", col("delay_seconds").cast("integer"))
+            .withColumn("is_stopped", col("is_stopped").cast("boolean"))
+            .withColumn("speed_kmh", col("speed_ms") * 3.6)
+            # Preserve 'timestamp' name for Gold Join alignment
+            .withColumn("timestamp", 
+                when(col("timestamp").isNotNull(), col("timestamp").cast("timestamp"))
                 .otherwise((col("event_time_ms") / 1000).cast("timestamp"))
             )
-            .withColumn("speed_kmh", col("speed_ms") * 3.6)
-            # ... delay_category logic remains same
         )
 
-        # Write to Silver (Delta)
-        silver_df.write.format("delta").mode("overwrite").partitionBy("date").save(silver_path)
+        logger.info(f"Writing {silver_df.count()} deduplicated enriched rows to {silver_path}")
+        silver_df.write.format("delta") \
+            .mode("overwrite") \
+            .option("overwriteSchema", "true") \
+            .partitionBy("date") \
+            .save(silver_path)
 
     except Exception as e:
-        logger.error(f"Silver Transformation failed: {e}")
+        logger.error(f"Silver Enriched Transformation failed: {e}")
+        sys.exit(1)
 
 def transform_stop_events(spark: SparkSession, config, process_date: str):
     """Transform bronze.stop_events -> silver.stop_events"""
@@ -68,14 +78,16 @@ def transform_stop_events(spark: SparkSession, config, process_date: str):
     silver_path = f"{config.silver_path}/stop_events"
 
     try:
-        if not DeltaTable.isDeltaTable(spark, bronze_path):
-            logger.warning(f"Bronze table not found at {bronze_path}. Skipping.")
-            return
+        logger.info(f"Reading raw stop_events Delta data from {bronze_path}/date={process_date}")
+        
+        bronze_df = spark.read.format("delta") \
+            .load(bronze_path) \
+            .filter(col("date") == process_date)
+        
+        if bronze_df.count() == 0:
+            logger.error(f"FATAL: No stop_events data found for {process_date} at {bronze_path}")
+            sys.exit(1)
 
-        # STRICTLY filter by date
-        bronze_df = spark.read.format("delta").load(bronze_path).filter(col("date") == process_date)
-
-        # Aligned: stop_id is String to match Metadata
         window = Window.partitionBy("vehicle_id", "stop_id", "arrival_time").orderBy(
             col("kafka_offset").desc()
         )
@@ -84,27 +96,26 @@ def transform_stop_events(spark: SparkSession, config, process_date: str):
             bronze_df.withColumn("row_num", row_number().over(window))
             .filter(col("row_num") == 1)
             .drop("row_num")
-            # CRITICAL: Force UTC conversion
+            # ALIGNMENT: Required for Gold aggregate_stop_performance joins
             .withColumn("arrival_timestamp", (col("arrival_time") / 1000).cast("timestamp"))
+            .withColumn("delay_at_arrival", col("delay_at_arrival").cast("integer"))
+            .withColumn("dwell_time_ms", col("dwell_time_ms").cast("long"))
         )
 
-        if DeltaTable.isDeltaTable(spark, silver_path):
-            dt = DeltaTable.forPath(spark, silver_path)
-            dt.alias("t").merge(
-                silver_df.alias("s"),
-                "t.vehicle_id = s.vehicle_id AND t.stop_id = s.stop_id AND t.arrival_time = s.arrival_time AND t.date = s.date",
-            ).whenNotMatchedInsertAll().execute()
-        else:
-            silver_df.write.format("delta").mode("overwrite").partitionBy("date").save(silver_path)
+        logger.info(f"Writing {silver_df.count()} deduplicated stop_events to {silver_path}")
+        silver_df.write.format("delta") \
+            .mode("overwrite") \
+            .option("overwriteSchema", "true") \
+            .partitionBy("date") \
+            .save(silver_path)
 
     except Exception as e:
-        logger.warning(f"Stop events processing failed for {process_date}: {e}")
-
+        logger.error(f"Silver Stop Events Transformation failed: {e}")
+        sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--table", choices=["enriched", "stop_events", "all"], default="all")
-    # Robustness: date is now required for OCI/Cron stability
     parser.add_argument("--date", type=str, required=True, help="YYYY-MM-DD")
     args = parser.parse_args()
 
@@ -117,7 +128,6 @@ def main():
         transform_stop_events(spark, config, args.date)
 
     spark.stop()
-
 
 if __name__ == "__main__":
     main()

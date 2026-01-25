@@ -31,14 +31,14 @@ logger = logging.getLogger("BronzeWriter")
 ENRICHED_SCHEMA = StructType(
     [
         StructField("vehicle_id", StringType(), False),
-        StructField("event_timestamp", StringType(), True),
+        StructField("timestamp", StringType(), True),
         StructField("event_time_ms", LongType(), True),
         StructField("latitude", DoubleType(), True),
         StructField("longitude", DoubleType(), True),
         StructField("speed_ms", DoubleType(), True),
         StructField("heading", IntegerType(), True),
         StructField("delay_seconds", IntegerType(), True),
-        StructField("door_status", BooleanType(), True),
+        StructField("door_status", IntegerType(), True),
         StructField("line_id", StringType(), True),
         StructField("direction_id", IntegerType(), True),
         StructField("operator_id", IntegerType(), True),
@@ -62,12 +62,37 @@ STOP_EVENTS_SCHEMA = StructType(
         StructField("arrival_time", LongType(), True),
         StructField("delay_at_arrival", IntegerType(), True),
         StructField("dwell_time_ms", LongType(), True),
-        StructField("door_opened", BooleanType(), True),
+        StructField("door_status", IntegerType(), True),
         StructField("latitude", DoubleType(), True),
         StructField("longitude", DoubleType(), True),
     ]
 )
 
+
+def upsert_to_delta(micro_batch_df, batch_id, output_path):
+    from delta.tables import DeltaTable
+    
+    if not DeltaTable.isDeltaTable(micro_batch_df.sparkSession, output_path):
+        micro_batch_df.write.format("delta").mode("append").partitionBy("date").save(output_path)
+    else:
+        dt = DeltaTable.forPath(micro_batch_df.sparkSession, output_path)
+        
+        # Detect table type by checking for specific columns
+        cols = micro_batch_df.columns
+        if "event_time_ms" in cols:
+            # Enriched logic: vehicle + time + date
+            condition = "t.vehicle_id = s.vehicle_id AND t.date = s.date AND t.event_time_ms = s.event_time_ms"
+        elif "arrival_time" in cols:
+            # Stop Events logic: vehicle + arrival + date
+            condition = "t.vehicle_id = s.vehicle_id AND t.date = s.date AND t.arrival_time = s.arrival_time"
+        else:
+            # Fallback for other schemas
+            condition = "t.vehicle_id = s.vehicle_id AND t.date = s.date"
+
+        dt.alias("t").merge(
+            micro_batch_df.alias("s"),
+            condition
+        ).whenNotMatchedInsertAll().execute()
 
 def write_bronze_stream(
     spark: SparkSession,
@@ -109,14 +134,13 @@ def write_bronze_stream(
         .withColumn("date", to_date(col("kafka_timestamp")))
     )
 
-    # Write to Delta Lake with 10s micro-batch triggers
+    # Write to Delta Lake using foreachBatch for Idempotent Upserts
     return (
-        parsed_df.writeStream.format("delta")
-        .outputMode("append")
+        parsed_df.writeStream
+        .foreachBatch(lambda df, batch_id: upsert_to_delta(df, batch_id, output_path))
         .option("checkpointLocation", checkpoint_path)
-        .partitionBy("date")
         .trigger(processingTime="10 seconds")
-        .start(output_path)
+        .start()
     )
 
 
