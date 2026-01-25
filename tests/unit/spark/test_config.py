@@ -1,139 +1,93 @@
-"""
-Spark configuration loader.
-Context: Medallion Architecture (Bronze -> Silver -> Gold)
-All configuration from environment variables - no hardcoded values.
-Methodical: Hardened with S3A retry limits to prevent silent hangs.
-Aligned: Global UTC session lock to prevent timezone leaks.
-"""
-
 import os
-from dataclasses import dataclass
+import pytest
+from unittest.mock import patch, MagicMock
+from spark.config import load_config, create_spark_session
 
+# --- Configuration Tests ---
 
-@dataclass
-class SparkConfig:
-    """Configuration for Spark jobs."""
-
-    # Kafka
-    kafka_bootstrap_servers: str
-    kafka_enriched_topic: str = "fleet.enriched"
-    kafka_stops_topic: str = "fleet.stop_events"
-
-    # MinIO / S3
-    minio_endpoint: str = ""
-    minio_access_key: str = ""
-    minio_secret_key: str = ""
-    lakehouse_bucket: str = "transitflow-lakehouse"
-
-    # Retention (Days)
-    bronze_retention_days: int = 7
-    silver_retention_days: int = 30
-    gold_retention_days: int = 365
-
-    # Paths (Computed in __post_init__)
-    bronze_path: str = ""
-    silver_path: str = ""
-    gold_path: str = ""
-
-    # PostgreSQL
-    postgres_jdbc_url: str = ""
-    postgres_host: str = ""
-    postgres_port: str = ""
-    postgres_db: str = ""
-    postgres_user: str = ""
-    postgres_password: str = ""
-
-    def __post_init__(self):
-        """Construct logic-based paths using S3A protocol."""
-        base = f"s3a://{self.lakehouse_bucket}"
-        self.bronze_path = f"{base}/bronze"
-        self.silver_path = f"{base}/silver"
-        self.gold_path = f"{base}/gold"
-
-    def get_checkpoint_path(self, job_name: str) -> str:
-        """Centralized checkpoint management for streaming jobs."""
-        return f"s3a://{self.lakehouse_bucket}/_checkpoints/{job_name}"
-
-
-def load_config() -> SparkConfig:
-    """Load configuration from environment variables."""
-
-    def get_required(key: str) -> str:
-        value = os.environ.get(key)
-        if not value:
-            raise ValueError(f"Required environment variable not set: {key}")
-        return value
-
-    def get_optional(key: str, default: str = "") -> str:
-        return os.environ.get(key, default)
-
-    # Database parameters
-    pg_host = get_optional("POSTGRES_HOST", "postgres")
-    pg_port = get_optional("POSTGRES_PORT", "5432")
-    pg_db = get_optional("POSTGRES_DB", "transit")
-
-    config = SparkConfig(
-        kafka_bootstrap_servers=get_optional("KAFKA_BOOTSTRAP_SERVERS", "redpanda:29092"),
-        minio_endpoint=get_optional("MINIO_ENDPOINT", "http://minio:9000"),
-        minio_access_key=get_required("MINIO_ROOT_USER"),
-        minio_secret_key=get_required("MINIO_ROOT_PASSWORD"),
-        lakehouse_bucket=get_optional("LAKEHOUSE_BUCKET", "transitflow-lakehouse"),
+def test_load_config_valid_env():
+    """Verify that required environment variables are correctly mapped to SparkConfig."""
+    mock_env = {
+        "MINIO_ROOT_USER": "admin_user",
+        "MINIO_ROOT_PASSWORD": "admin_password",
+        "POSTGRES_USER": "transit_app",
+        "POSTGRES_PASSWORD": "secure_password",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_DB": "test_db"
+    }
+    
+    with patch.dict(os.environ, mock_env):
+        config = load_config()
         
-        # Aligned: Pull retention days from env with fallback to defaults
-        bronze_retention_days=int(get_optional("BRONZE_RETENTION_DAYS", "7")),
-        silver_retention_days=int(get_optional("SILVER_RETENTION_DAYS", "30")),
-        gold_retention_days=int(get_optional("GOLD_RETENTION_DAYS", "365")),
+        # Verify Required Fields
+        assert config.minio_access_key == "admin_user"
+        assert config.postgres_user == "transit_app"
         
-        postgres_host=pg_host,
-        postgres_port=pg_port,
-        postgres_db=pg_db,
-        postgres_user=get_required("POSTGRES_USER"),
-        postgres_password=get_required("POSTGRES_PASSWORD"),
-    )
+        # Verify Logic-Based Paths (S3A Protocol)
+        assert config.bronze_path == "s3a://transitflow-lakehouse/bronze"
+        assert config.gold_path == "s3a://transitflow-lakehouse/gold"
+        
+        # Verify JDBC URL Construction
+        assert config.postgres_jdbc_url == "jdbc:postgresql://localhost:5432/test_db"
 
-    # Construct JDBC URL based on provided host/port/db
-    config.postgres_jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_db}"
+def test_load_config_missing_required():
+    """Ensure load_config raises ValueError if critical credentials are missing."""
+    # Clear environment to ensure no leakage from host machine
+    with patch.dict(os.environ, {}, clear=True):
+        with pytest.raises(ValueError, match="Required environment variable not set"):
+            load_config()
 
-    return config
+def test_get_checkpoint_path_logic():
+    """Verify consistent checkpoint pathing for streaming integrity."""
+    mock_env = {
+        "MINIO_ROOT_USER": "u", "MINIO_ROOT_PASSWORD": "p",
+        "POSTGRES_USER": "u", "POSTGRES_PASSWORD": "p"
+    }
+    with patch.dict(os.environ, mock_env):
+        config = load_config()
+        path = config.get_checkpoint_path("test_job")
+        assert path == "s3a://transitflow-lakehouse/_checkpoints/test_job"
 
-def create_spark_session(app_name: str):
-    """Initializes Spark Session with optimized S3A and Delta settings."""
-    from pyspark.sql import SparkSession
-    config = load_config()
+# --- Spark Session Tests ---
 
-    spark = (
-        SparkSession.builder.appName(app_name)
-        .config(
-            "spark.jars.packages",
-            "io.delta:delta-spark_2.12:3.0.0,"
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
-            "org.apache.hadoop:hadoop-aws:3.3.4,"
-            "org.postgresql:postgresql:42.6.0"
-        )
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config(
-            "spark.sql.catalog.spark_catalog",
-            "org.apache.spark.sql.delta.catalog.DeltaCatalog"
-        )
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.hadoop.fs.s3a.endpoint", config.minio_endpoint)
-        .config("spark.hadoop.fs.s3a.access.key", config.minio_access_key)
-        .config("spark.hadoop.fs.s3a.secret.key", config.minio_secret_key)
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        .config("spark.hadoop.fs.s3a.connection.timeout", "5000")
-        .config("spark.hadoop.fs.s3a.attempts.maximum", "1")
-        .config("spark.hadoop.fs.s3a.retry.limit", "1")
-        .config(
-            "spark.delta.logStore.class",
-            "org.apache.spark.sql.delta.storage.S3SingleDriverLogStore"
-        )
-        .getOrCreate()
-    )
+@patch("pyspark.sql.SparkSession.builder")
+def test_spark_session_hardenings(mock_builder):
+    """
+    Verify the Principal Contract: UTC Lock, S3A Timeouts, and Circuit Breakers.
+    This test ensures we never deploy a session without our safety guardrails.
+    """
+    # Mocking the fluent API of SparkSession.builder
+    mock_builder.appName.return_value = mock_builder
+    mock_builder.config.return_value = mock_builder
+    mock_session = MagicMock()
+    mock_builder.getOrCreate.return_value = mock_session
+    
+    # Mock Hadoop Configuration check
+    mock_hadoop_conf = MagicMock()
+    mock_session.sparkContext._jsc.hadoopConfiguration.return_value = mock_hadoop_conf
 
-    hc = spark.sparkContext._jsc.hadoopConfiguration()
-    hc.set("fs.s3a.connection.timeout", "5000")
-    hc.set("fs.s3a.attempts.maximum", "1")
+    mock_env = {
+        "MINIO_ROOT_USER": "u", "MINIO_ROOT_PASSWORD": "p",
+        "POSTGRES_USER": "u", "POSTGRES_PASSWORD": "p"
+    }
+    
+    with patch.dict(os.environ, mock_env):
+        create_spark_session("AuditApp")
 
-    return spark
+    # Capture all config calls into a dict for verification
+    config_calls = {call[0][0]: call[0][1] for call in mock_builder.config.call_args_list}
+
+    # 1. Verify Global Timezone Lock
+    assert config_calls.get("spark.sql.session.timeZone") == "UTC"
+
+    # 2. Verify S3A Anti-Hang Protections
+    assert config_calls.get("spark.hadoop.fs.s3a.connection.timeout") == "5000"
+    assert config_calls.get("spark.hadoop.fs.s3a.attempts.maximum") == "1"
+    assert config_calls.get("spark.hadoop.fs.s3a.retry.limit") == "1"
+
+    # 3. Verify Delta Storage Policy
+    assert "S3SingleDriverLogStore" in config_calls.get("spark.delta.logStore.class")
+
+    # 4. Verify Hard-Lock on Hadoop Context
+    mock_hadoop_conf.set.assert_any_call("fs.s3a.connection.timeout", "5000")
+    mock_hadoop_conf.set.assert_any_call("fs.s3a.attempts.maximum", "1")

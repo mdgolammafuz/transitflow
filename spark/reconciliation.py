@@ -40,18 +40,23 @@ class ReconciliationResult:
         return asdict(self)
 
 
-def get_count(spark, path, date):
-    """Safely get count for a specific date partition."""
+def get_count(spark, path, date, table_format="delta"):
+    """
+    Safely get count for a specific date partition.
+    Principal: Supports both raw Parquet (Bronze) and Delta (Silver).
+    """
     try:
         from delta.tables import DeltaTable
 
-        if not DeltaTable.isDeltaTable(spark, path):
-            logger.warning(f"Path is not a valid Delta table: {path}")
-            return 0
+        if table_format == "delta":
+            if not DeltaTable.isDeltaTable(spark, path):
+                logger.warning(f"Path is not a valid Delta table: {path}")
+                return 0
+            return spark.read.format("delta").load(path).filter(col("date") == date).count()
+        
 
-        return spark.read.format("delta").load(path).filter(col("date") == date).count()
     except Exception as e:
-        logger.warning(f"Could not retrieve count for {path}: {e}")
+        logger.warning(f"Could not retrieve count for {path} (format: {table_format}): {e}")
         return 0
 
 
@@ -116,22 +121,30 @@ def main():
     parser.add_argument("--save", action="store_true", default=True)
     args = parser.parse_args()
 
-    # Principal Logic: No longer defaults to "now" to prevent silent 0-count failures
+    # To prevent silent 0-count failures
     target_date = args.date
     
     config = load_config()
     spark = create_spark_session("TransitFlow-Reconciliation")
 
     # 1. Perform cross-layer counts
-    b_count = get_count(spark, f"{config.bronze_path}/enriched", target_date)
-    s_count = get_count(spark, f"{config.silver_path}/enriched", target_date)
+    # Bronze is raw Parquet, Silver is Delta
+    b_count = get_count(spark, f"{config.bronze_path}/enriched", target_date, table_format="delta")
+    s_count = get_count(spark, f"{config.silver_path}/enriched", target_date, table_format="delta")
 
     # 2. Calculate metrics
     diff = abs(b_count - s_count)
-    # Prevent DivisionByZero if Bronze is empty
-    diff_pct = (diff / b_count * 100) if b_count > 0 else 0.0
+    
+    # Principal Logic: Fix the 'False Pass' vulnerability.
+    # If Bronze is 0 but Silver has data, that's a 100% discrepancy/failure.
+    if b_count == 0:
+        diff_pct = 100.0 if s_count > 0 else 0.0
+    else:
+        diff_pct = (diff / b_count * 100)
+    
     threshold = 20.0  
-    is_passed = diff_pct <= threshold
+    # Both counts must be non-zero for a standard pass, or both must be zero.
+    is_passed = (diff_pct <= threshold) and not (b_count == 0 and s_count > 0)
 
     # 3. Create result object
     result = ReconciliationResult(

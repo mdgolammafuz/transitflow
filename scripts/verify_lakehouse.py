@@ -63,7 +63,7 @@ def check_medallion_layers(target_date):
     layers = {
         "Bronze": ["bronze/enriched", "bronze/stop_events"],
         "Silver": ["silver/enriched", "silver/stop_events"],
-        "Gold": ["gold/daily_metrics", "gold/hourly_metrics"],
+        "Gold": ["gold/daily_metrics", "gold/hourly_metrics", "gold/stop_performance"],
     }
 
     all_passed = True

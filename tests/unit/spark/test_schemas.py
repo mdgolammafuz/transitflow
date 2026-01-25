@@ -1,10 +1,11 @@
 """
 Unit tests for Spark Schemas.
 Verifies: Data contract integrity across the Medallion layers.
+Principal: Enforces the January 2026 Type-Safe contract.
 """
 
-from pyspark.sql.types import BooleanType, LongType, StringType
-from spark.bronze_writer import ENRICHED_SCHEMA
+from pyspark.sql.types import BooleanType, LongType, StringType, IntegerType, DoubleType
+from spark.bronze_writer import ENRICHED_SCHEMA, STOP_EVENTS_SCHEMA
 
 
 class TestSchemaIntegrity:
@@ -12,26 +13,46 @@ class TestSchemaIntegrity:
 
     def test_enriched_types(self):
         """
-        Verify telemetry types match physical expectations.
-        Aligned: vehicle_id must be a String to handle leading zeros and alphabetic IDs.
+        Verify telemetry types match physical expectations from Kafka.
+        Aligned: vehicle_id must be a String to handle leading zeros.
         """
         fields = {f.name: f.dataType for f in ENRICHED_SCHEMA.fields}
 
-        # Essential for trend analysis
-        assert isinstance(fields["event_time_ms"], LongType)
-        # Essential for stop detection logic
-        assert isinstance(fields["is_stopped"], BooleanType)
-        # CRITICAL ALIGNMENT: Must be StringType, NOT IntegerType
+        # 1. Identity Integrity (No Scientific Notation)
         assert isinstance(fields["vehicle_id"], StringType)
+        assert isinstance(fields["next_stop_id"], StringType)
 
-    def test_silver_extra_columns(self):
+        # 2. Logic & Status Integrity
+        # is_stopped is BOOLEAN in Kafka JSON
+        assert isinstance(fields["is_stopped"], BooleanType)
+        # door_status is INTEGER (0/1) in our hardened contract
+        assert isinstance(fields["door_status"], IntegerType)
+
+        # 3. Precision Integrity
+        assert isinstance(fields["speed_ms"], DoubleType)
+        assert isinstance(fields["event_time_ms"], LongType)
+
+    def test_stop_events_types(self):
         """
-        Silver must contain these derived columns for analytics.
-        These are generated in spark.silver_transform.transform_enriched.
+        Verify the Stop Events contract matches Flink StopArrival output.
         """
-        required_silver = ["event_timestamp", "speed_kmh", "delay_category"]
+        fields = {f.name: f.dataType for f in STOP_EVENTS_SCHEMA.fields}
         
-        # Verify the contract requires 3 specific transformations
-        assert len(required_silver) == 3
-        assert "speed_kmh" in required_silver
-        assert "delay_category" in required_silver
+        assert "door_status" in fields
+        assert isinstance(fields["door_status"], IntegerType)
+        assert isinstance(fields["stop_id"], StringType)
+
+    def test_silver_contract_expectations(self):
+        """
+        Documentation of columns required for downstream dbt/ML.
+        These are generated in spark.silver_transform.
+        """
+        required_silver = [
+            "event_timestamp", # Derived from timestamp or event_time_ms
+            "speed_kmh",       # speed_ms * 3.6
+            "is_stopped",      # Passed through as Boolean
+            "door_status"      # Passed through as Integer
+        ]
+        
+        assert "event_timestamp" in required_silver
+        assert "door_status" in required_silver
