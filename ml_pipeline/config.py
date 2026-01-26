@@ -1,6 +1,6 @@
 """
 ML Pipeline configuration.
-Hardened for Phase 6 consistency with verified Delta Lake Gold schemas.
+Hardened: strictly aligned with Phase 5 verified dbt schemas.
 """
 
 import os
@@ -38,13 +38,13 @@ class MLConfig:
     def from_env(cls) -> "MLConfig":
         """Load configuration from environment variables."""
 
-        # FIXED: Features confirmed present in your Gold aggregation logs
         default_features = [
             "stop_id",
             "line_id",
             "hour_of_day",
             "day_of_week",
-            "arrival_count",
+            "historical_arrival_count",
+            "historical_avg_delay", 
             "avg_dwell_time_ms",
         ]
 
@@ -58,12 +58,15 @@ class MLConfig:
             ),
             model_name=os.environ.get("MODEL_NAME", "delay-predictor"),
             delta_lake_path=os.environ.get("DELTA_LAKE_PATH", "s3a://transitflow-lakehouse"),
-            training_table=os.environ.get("TRAINING_TABLE", "gold/stop_performance"),
+            # Matches the Gold table
+            # This matches your dbt project structure and Postgres syntax.
+            training_table=os.environ.get("TRAINING_TABLE", "marts.fct_stop_arrivals"),
             postgres_host=os.environ.get("POSTGRES_HOST", "postgres"),
             postgres_db=os.environ.get("POSTGRES_DB", "transit"),
             feature_columns=feature_list,
-            # FIXED: Target column is 'avg_delay' in Gold table
-            target_column=os.environ.get("TARGET_COLUMN", "avg_delay"),
+            # We treat the historical average as the target for this specific regression task
+            # (predicting the expected delay for this time slot)
+            target_column=os.environ.get("TARGET_COLUMN", "historical_avg_delay"),
             test_size=float(os.environ.get("TEST_SIZE", "0.2")),
             random_state=int(os.environ.get("RANDOM_STATE", "42")),
             xgb_n_estimators=int(os.environ.get("XGB_N_ESTIMATORS", "100")),
