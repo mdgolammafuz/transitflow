@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from feature_store.config import FeatureStoreConfig
 from feature_store.feature_service import CombinedFeatures, FeatureService
 from ml_pipeline.config import MLConfig
+from ml_pipeline.registry import ModelRegistry
 from ml_pipeline.training import DelayPredictor
 from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, circuit_registry
 from serving.tracing import get_tracer, init_tracer
@@ -98,7 +99,29 @@ offline_circuit: Optional[CircuitBreaker] = None
 
 
 def load_model() -> Optional[CachedModel]:
-    """Load model from disk or MLflow."""
+    """Load model from MLflow Registry, local disk, or fallback to mock."""
+    
+    # 1. Try loading from the MLflow Registry first
+    try:
+        registry = ModelRegistry(ml_config)
+        # Fetch the raw MLflow model object
+        raw_mlflow_model = registry.load_latest_model()
+        
+        # Inject it into the DelayPredictor wrapper
+        # This gives us the 'predict_single' method the API needs
+        predictor = DelayPredictor(ml_config)
+        predictor._model = raw_mlflow_model
+        
+        logger.info("Successfully loaded latest model from MLflow registry")
+        return CachedModel(
+            predictor=predictor,
+            loaded_at=datetime.now(timezone.utc),
+            version="registry_latest",
+        )
+    except Exception as e:
+        logger.warning("MLflow Registry load failed (falling back to disk): %s", e)
+
+    # 2. Local Disk Logic
     model_path = os.environ.get("MODEL_PATH", "models/delay_predictor.pkl")
 
     if os.path.exists(model_path):
@@ -112,8 +135,10 @@ def load_model() -> Optional[CachedModel]:
                 version=os.environ.get("MODEL_VERSION", "local"),
             )
         except Exception as e:
-            logger.error("Failed to load model: %s", e)
+            logger.error("Failed to load local model: %s", e)
             return None
+    
+    # 3. Mock Logic
     else:
         logger.warning("Model not found at %s, using mock predictor", model_path)
         predictor = DelayPredictor(ml_config)
@@ -122,7 +147,6 @@ def load_model() -> Optional[CachedModel]:
             loaded_at=datetime.now(timezone.utc),
             version="mock",
         )
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
