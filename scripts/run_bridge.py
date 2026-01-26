@@ -40,7 +40,6 @@ def main():
     setup_logging(args.log_level)
 
     # Verification log to be absolutely sure before starting
-    # (Optional: remove once verified)
     print(f"Operational Check: Metrics Port set to {settings.metrics.port}")
 
     bridge = Bridge(settings)
