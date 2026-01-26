@@ -57,7 +57,7 @@ SPARK_SUBMIT := docker exec -it --env-file infra/local/.env \
 	--driver-memory 1G \
 	--packages $(SPARK_PKGS)
 
-# --- The Clean S3A Bridge ---
+# --- The S3A Bridge ---
 # We use the variable names as they appear inside our .env/container
 S3A_CONF := --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
 	          --conf spark.hadoop.fs.s3a.access.key=$${MINIO_ROOT_USER} \
@@ -338,21 +338,49 @@ feature-verify:
 
 feature-test:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/feature_store/ -v
-	
+
+# Runs locally with Postgres connection
 train-model:
-	@echo "Starting ML Training Pipeline..."
-	$(SPARK_SUBMIT) /opt/spark/jobs/ml_pipeline/training.py
-
+	@echo "Starting ML Training Pipeline (Postgres -> XGBoost)..."
+	PYTHONPATH=$(CURDIR) \
+	MLFLOW_TRACKING_URI=http://localhost:5001 \
+	MLFLOW_S3_ENDPOINT_URL=http://localhost:9000 \
+	MLFLOW_S3_IGNORE_TLS=true \
+	AWS_ACCESS_KEY_ID=$(MINIO_ROOT_USER) \
+	AWS_SECRET_ACCESS_KEY=$(MINIO_ROOT_PASSWORD) \
+	AWS_DEFAULT_REGION=us-east-1 \
+	NO_PROXY=localhost,127.0.0.1,0.0.0.0 \
+	POSTGRES_HOST=127.0.0.1 \
+	$(LOCAL_ENV) python3 scripts/verify_train_model.py
+	
 serving-api:
-	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 serving/api.py
+	@echo "Starting ML Serving API..."
+	PYTHONPATH=$(CURDIR) \
+	MLFLOW_TRACKING_URI=http://localhost:5001 \
+	MLFLOW_S3_ENDPOINT_URL=http://localhost:9000 \
+	MLFLOW_S3_IGNORE_TLS=true \
+	AWS_ACCESS_KEY_ID=$(MINIO_ROOT_USER) \
+	AWS_SECRET_ACCESS_KEY=$(MINIO_ROOT_PASSWORD) \
+	AWS_DEFAULT_REGION=us-east-1 \
+	$(LOCAL_ENV) python3 serving/api.py
 
+
+# Points to verification script
 serving-verify:
-	@echo "Running Phase 6 Smoke Tests..."
-	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/smoke_test_ml_serving.py --check-all
-
+	@echo "Running Phase 6 Verification..."
+	PYTHONPATH=$(CURDIR) \
+	MLFLOW_TRACKING_URI=http://localhost:5001 \
+	MLFLOW_S3_ENDPOINT_URL=http://localhost:9000 \
+	MLFLOW_S3_IGNORE_TLS=true \
+	AWS_ACCESS_KEY_ID=$(MINIO_ROOT_USER) \
+	AWS_SECRET_ACCESS_KEY=$(MINIO_ROOT_PASSWORD) \
+	AWS_DEFAULT_REGION=us-east-1 \
+	SERVING_API_URL=http://localhost:8001 \
+	$(LOCAL_ENV) python3 scripts/verify_ml_serving.py --check-all
+	
 serving-test:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/ml_pipeline/ tests/unit/serving/ -v
-	
+
 # --- Maintenance ---
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
