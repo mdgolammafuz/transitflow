@@ -1,9 +1,11 @@
 """
 Unit tests for Feature Store.
 Hardened: Validates schema alignment with dbt marts and coordinate handling.
+Updated: Adapted for Connection Pooling architecture.
 """
 
 import os
+import pytest
 from unittest.mock import MagicMock, patch
 
 
@@ -30,7 +32,6 @@ class TestFeatureStoreConfig:
             postgres_user="transit_app",
             postgres_password="secure_password",
         )
-        # Accessing it as a property, not a function call
         assert "pg_prod" in config.postgres_dsn
         assert "transit_app" in config.postgres_dsn
 
@@ -85,7 +86,7 @@ class TestFeatureVectorConsistency:
         Ensures coordinates are correctly propagated in the feature vector.
         """
         from feature_store.feature_service import CombinedFeatures
-        from feature_store.online_store import OnlineFeatures
+        from feature_store.storage.online_store import OnlineFeatures
 
         online_data = OnlineFeatures(
             vehicle_id=1362,
@@ -121,25 +122,21 @@ class TestStoreHealthState:
     def test_online_store_not_connected_behavior(self):
         """Verify the store correctly reports its own health when disconnected."""
         from feature_store.config import FeatureStoreConfig
-        from feature_store.online_store import OnlineStore
+        from feature_store.storage.online_store import OnlineStore
 
         config = FeatureStoreConfig(postgres_user="test", postgres_password="test")
         store = OnlineStore(config)
+        # Without calling connect(), client is None
         assert store.is_healthy() is False
 
-    @patch("psycopg2.connect")
-    def test_offline_store_search_path(self, mock_connect):
-        """Verify the store explicitly sets the search path to marts."""
+    @patch("psycopg2.pool.SimpleConnectionPool")
+    def test_offline_store_pooling_initialization(self, mock_pool_cls):
+        """
+        Verify the store initializes the Connection Pool correctly.
+        Updated for Phase 5 Architecture.
+        """
         from feature_store.config import FeatureStoreConfig
-        from feature_store.offline_store import OfflineStore
-
-        # 1. Setup chain of mocks for 'with self._conn.cursor() as cur:'
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_connect.return_value = mock_conn
-
-        # This mocks the context manager enter behavior
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        from feature_store.storage.offline_store import OfflineStore
 
         config = FeatureStoreConfig(
             postgres_user="test", postgres_password="test", postgres_schema="marts"
@@ -147,5 +144,9 @@ class TestStoreHealthState:
         store = OfflineStore(config)
         store.connect()
 
-        # 2. Check if execute was called on the cursor object within the context
-        mock_cursor.execute.assert_any_call("SET search_path TO marts, public")
+        # Check if the pool was initialized with correct params
+        mock_pool_cls.assert_called_once()
+        call_kwargs = mock_pool_cls.call_args[1]
+        assert call_kwargs["minconn"] == 1
+        assert call_kwargs["maxconn"] == 10
+        assert call_kwargs["user"] == "test"
