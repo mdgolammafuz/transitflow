@@ -1,7 +1,7 @@
 """
 Feature Service - Unified Feature Access.
 Pattern: Semantic Interface & ML Reproducibility
-Methodical: Updated to direct ms mapping for dwell time and historical naming.
+Methodical: Orchestrates the handshake between Real-time (Redis) and Historical (Postgres).
 """
 
 import logging
@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from feature_store.config import FeatureStoreConfig
-from feature_store.offline_store import OfflineStore, StopFeatures
-from feature_store.online_store import OnlineFeatures, OnlineStore
+# Updated imports to match the new storage folder structure
+from feature_store.storage.offline_store import OfflineStore, StopFeatures
+from feature_store.storage.online_store import OnlineFeatures, OnlineStore
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class CombinedFeatures:
     """Combined online + offline features for prediction."""
 
@@ -75,8 +76,8 @@ class CombinedFeatures:
                     "speed_trend": 0.0,
                     "is_stopped": 0,
                     "stopped_duration_ms": 0,
-                    "latitude": None,
-                    "longitude": None,
+                    "latitude": 0.0,
+                    "longitude": 0.0,
                     "feature_age_ms": -1,
                 }
             )
@@ -84,7 +85,7 @@ class CombinedFeatures:
         # 2. Historical (Offline) features - 'historical_' alignment
         if self.offline:
             # Spatial Fallback: Use historical stop coordinates if real-time GPS is lost
-            if features.get("latitude") is None:
+            if features.get("latitude") == 0.0:
                 features["latitude"] = self.offline.latitude
                 features["longitude"] = self.offline.longitude
 
@@ -92,7 +93,7 @@ class CombinedFeatures:
                 {
                     "historical_avg_delay": self.offline.historical_avg_delay,
                     "historical_stddev_delay": self.offline.historical_stddev_delay,
-                    "avg_dwell_time_ms": self.offline.avg_dwell_time_ms,  # Direct mapping from Gold Mart
+                    "avg_dwell_time_ms": self.offline.avg_dwell_time_ms,
                     "historical_arrival_count": self.offline.historical_arrival_count,
                 }
             )
@@ -189,8 +190,7 @@ class FeatureService:
             online_data = self._online_store.get_features(vehicle_id)
             if online_data:
                 self._metrics.online_hits += 1
-
-                # Use Live Data to populate the Handshake Keys if not overridden
+                # Use live context if user didn't override
                 if stop_id is None:
                     stop_id = online_data.next_stop_id
                 if line_id is None:
@@ -199,23 +199,19 @@ class FeatureService:
             self._metrics.online_errors += 1
             logger.error(f"Online store failure for vehicle {vehicle_id}: {e}")
 
-        # 2. Fetch Offline Features (The "Handshake")
-        if stop_id:
-            self._metrics.offline_requests += 1
-            try:
-                # We now pass line_id to ensure the historical match is precise
-                offline_data = self._offline_store.get_stop_features(
-                    stop_id=stop_id, line_id=line_id, hour_of_day=h_ctx, day_of_week=d_ctx
-                )
-                if offline_data:
-                    self._metrics.offline_hits += 1
-                else:
-                    logger.warning(
-                        f"Handshake failed: No history for Stop {stop_id} | Line {line_id}"
-                    )
-            except Exception as e:
-                self._metrics.offline_errors += 1
-                logger.error(f"Offline store failure for stop {stop_id}: {e}")
+        # 2. Fetch Offline Features
+        self._metrics.offline_requests += 1
+        try:
+            offline_data = self._offline_store.get_stop_features(
+                stop_id=stop_id, line_id=line_id, hour_of_day=h_ctx, day_of_week=d_ctx
+            )
+            if offline_data:
+                self._metrics.offline_hits += 1
+            else:
+                logger.debug(f"Handshake miss: No history for Stop {stop_id} | Line {line_id}")
+        except Exception as e:
+            self._metrics.offline_errors += 1
+            logger.error(f"Offline store failure for stop {stop_id}: {e}")
 
         return CombinedFeatures(
             vehicle_id=vehicle_id,
