@@ -103,7 +103,7 @@ def main():
     parser.add_argument("--url", default="http://localhost:8081")
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    # NEW ARGUMENT: Allows Makefile to control the location
+    # Allows Makefile to control the location
     parser.add_argument("--schema-dir", default="src/schema_registry/schemas", help="Path to .avsc files")
     args = parser.parse_args()
 
