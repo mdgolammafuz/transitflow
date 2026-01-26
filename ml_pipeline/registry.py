@@ -1,3 +1,4 @@
+import os
 import mlflow
 import mlflow.pyfunc
 import mlflow.sklearn
@@ -10,19 +11,24 @@ logger = structlog.get_logger()
 
 
 class ModelRegistry:
+    
     def __init__(self, config: MLConfig):
         self.config = config
+        
+        # Point both to the remote Docker container
+        # Ensure the client doesn't inherit the server's 
+        # internal container paths for temporary bookkeeping.
+        os.environ["MLFLOW_ARTIFACT_ROOT"] = "s3://transitflow-lakehouse/mlflow"
+        
         mlflow.set_tracking_uri(config.mlflow_tracking_uri)
+        mlflow.set_registry_uri(config.mlflow_tracking_uri)
         mlflow.set_experiment(config.mlflow_experiment_name)
-
         # 1. Disable all autologging to prevent background interference
         mlflow.autolog(disable=True)
 
         # 2. Specifically target the XGBoost autologger if the library is present
         try:
             import xgboost  # noqa: F401
-
-            # We use the full path to avoid variable shadowing
             mlflow.xgboost.autolog(disable=True)
         except (ImportError, AttributeError):
             pass
