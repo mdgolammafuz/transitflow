@@ -72,13 +72,26 @@ class DelayPredictor:
 
     @property
     def is_trained(self) -> bool:
-        if XGB_AVAILABLE and self._model:
+        """
+        Checks if the model is loaded and ready for inference.
+        Supports both raw XGBoost models and MLflow PyFunc wrappers.
+        """
+        if self._model is None:
+            return False
+            
+        # 1. Handle Raw XGBoost Model (Strict Check)
+        # If it has get_booster, it's a raw model, so we verify it's actually fitted.
+        if hasattr(self._model, "get_booster"):
             try:
                 self._model.get_booster()
                 return True
             except Exception:
                 return False
-        return self._model is not None
+                
+        # 2. Handle MLflow Wrapper / Mock / Sklearn
+        # If it doesn't have get_booster but has .predict, it's a loaded generic model.
+        # Since we load these from disk/registry, they are inherently "trained".
+        return True
 
     def _prepare_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
         """Validates columns and filters features based on what is available in the DF."""
@@ -100,9 +113,22 @@ class DelayPredictor:
 
         X = df[available_features].copy()
         for col in X.columns:
-            X[col] = pd.to_numeric(X[col], errors="coerce").fillna(0)
+            # Raise error on invalid numeric data instead of silent 0.0
+            try:
+                X[col] = pd.to_numeric(X[col], errors="raise")
+            except ValueError as e:
+                logger.error("data_type_mismatch", column=col, error=str(e))
+                raise ValueError(f"Column {col} contains non-numeric data that cannot be processed.") from e
+            
+            # Only fill genuine NaNs (missing values), not bad types
+            X[col] = X[col].fillna(0)
 
-        y = pd.to_numeric(df[target], errors="coerce").fillna(0)
+        # Validate Target Variable
+        try:
+            y = pd.to_numeric(df[target], errors="raise").fillna(0)
+        except ValueError as e:
+            logger.error("target_type_mismatch", column=target, error=str(e))
+            raise ValueError(f"Target {target} contains non-numeric data.") from e
 
         return X, y, available_features
 
@@ -181,7 +207,55 @@ class DelayPredictor:
         )
 
         return result
+    
+    def predict_single(self, features: Dict[str, Any]) -> float:
+        """
+        Make a prediction for a single feature vector.
+        
+        Args:
+            features: Dictionary of features from Feature Store
+            
+        Returns:
+            Predicted delay in seconds
+        """
+        if not self.is_trained:
+            logger.warning("predict_called_on_untrained_model")
+            return 0.0
 
+        # Convert single dict to DataFrame [1 row]
+        # We must align with the feature columns expected by the model
+        data = {}
+        for col in self._feature_columns:
+            val = features.get(col, 0)
+            data[col] = [val]
+            
+        df = pd.DataFrame(data)
+        
+        # Ensure numeric types strict check
+        # We raise error here so the API circuit breaker can detect data issues
+        for col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors='raise')
+            except ValueError as e:
+                logger.error("data_type_error", column=col, error=str(e))
+                raise e
+            
+        # MLflow PyFunc models prefer DataFrames over raw values.
+        # Raw XGBoost/Sklearn models handle both.
+        try:
+            # Check if it's an MLflow wrapper (PyFuncModel) or native XGBoost
+            if hasattr(self._model, "predict"):
+                # Pass the DataFrame directly for MLflow compatibility
+                pred = self._model.predict(df)
+                return float(pred[0])
+            elif isinstance(self._model, MockPredictor):
+                pred = self._model.predict(df.values)
+                return float(pred[0])
+        except Exception as e:
+            logger.error("prediction_execution_failed", error=str(e))
+            raise e
+            
+        return 0.0
 
 def train_model(
     config: MLConfig, df: pd.DataFrame, delta_version: int = 0
