@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Pipeline Integrity Verification Utility
-Hardened for Phase 4: No Renaming & UTC Lock Enforcement.
 """
 
 import argparse
