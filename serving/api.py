@@ -2,34 +2,32 @@
 ML Serving API.
 
 Patterns:
-Distributed Tracing
-Circuit Breaker
-ML Reproducibility
+- Circuit Breaker (Resiliency)
+- Distributed Tracing (Observability)
+- Shadow Deployment (Safe Release)
+- Prometheus Metrics (Monitoring)
 
 FastAPI application for delay predictions with:
 - Circuit breaker protection for feature store
 - OpenTelemetry distributed tracing
 - Model caching with periodic refresh
-- Prediction logging to Kafka
-
-Interview talking point:
-"The Serving API has <10ms p99 latency. We achieve this through model
-caching, circuit breakers that fail fast when stores are down, and
-async prediction logging. The tracing lets us pinpoint bottlenecks
-in production."
+- Shadow mode for validating Staging models against Production traffic
 """
 
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from prometheus_client import generate_latest
 
+# --- Project Imports ---
 from feature_store.config import FeatureStoreConfig
 from feature_store.feature_service import CombinedFeatures, FeatureService
 from ml_pipeline.config import MLConfig
@@ -37,36 +35,36 @@ from ml_pipeline.registry import ModelRegistry
 from ml_pipeline.training import DelayPredictor
 from serving.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, circuit_registry
 from serving.tracing import get_tracer, init_tracer
+from serving.shadow import ShadowPredictor
+import monitoring.metrics as metrics
 
+# --- Configuration ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
+# Feature Flag for Shadow Mode (Default: False to save resources)
+ENABLE_SHADOW = os.getenv("ENABLE_SHADOW", "false").lower() == "true"
 
 @dataclass
 class CachedModel:
     """Cached model with metadata."""
-
     predictor: DelayPredictor
     loaded_at: datetime
     version: str
 
-
 class PredictionRequest(BaseModel):
     """Prediction request body."""
-
     vehicle_id: int
     stop_id: Optional[int] = None
     line_id: Optional[str] = None
     hour_of_day: Optional[int] = Field(None, ge=0, le=23)
     day_of_week: Optional[int] = Field(None, ge=0, le=6)
 
-
 class PredictionResponse(BaseModel):
     """Prediction response."""
-
     vehicle_id: int
     predicted_delay_seconds: float
     prediction_timestamp: int
@@ -76,135 +74,158 @@ class PredictionResponse(BaseModel):
     offline_features_available: bool
     latency_ms: float
     trace_id: Optional[str] = None
-
+    shadow_mode: bool
 
 class HealthResponse(BaseModel):
     """Health check response."""
-
     status: str
     model_loaded: bool
     model_version: Optional[str]
+    shadow_enabled: bool
     feature_store: Dict[str, str]
     circuit_breakers: Dict[str, str]
 
-
+# --- Global State ---
 feature_config = FeatureStoreConfig.from_env()
 ml_config = MLConfig.from_env()
 
 feature_service: Optional[FeatureService] = None
 cached_model: Optional[CachedModel] = None
+shadow_predictor: Optional[ShadowPredictor] = None
 
 online_circuit: Optional[CircuitBreaker] = None
 offline_circuit: Optional[CircuitBreaker] = None
 
 
-def load_model() -> Optional[CachedModel]:
-    """Load model from MLflow Registry, local disk, or fallback to mock."""
-    
-    # 1. Try loading from the MLflow Registry first
+def load_production_model() -> Optional[CachedModel]:
+    """Load primary production model from Registry or Disk."""
+    # 1. Try MLflow Registry
     try:
         registry = ModelRegistry(ml_config)
-        # Fetch the raw MLflow model object
-        raw_mlflow_model = registry.load_latest_model()
+        raw_model = registry.load_latest_model()
         
-        # Inject it into the DelayPredictor wrapper
-        # This gives us the 'predict_single' method the API needs
         predictor = DelayPredictor(ml_config)
-        predictor._model = raw_mlflow_model
+        predictor._model = raw_model
         
-        logger.info("Successfully loaded latest model from MLflow registry")
+        logger.info("Successfully loaded Production model from MLflow")
         return CachedModel(
             predictor=predictor,
             loaded_at=datetime.now(timezone.utc),
             version="registry_latest",
         )
     except Exception as e:
-        logger.warning("MLflow Registry load failed (falling back to disk): %s", e)
+        logger.warning(f"MLflow load failed: {e}. Falling back to disk.")
 
-    # 2. Local Disk Logic
+    # 2. Fallback to Disk
     model_path = os.environ.get("MODEL_PATH", "models/delay_predictor.pkl")
-
     if os.path.exists(model_path):
         try:
             predictor = DelayPredictor(ml_config)
             predictor.load(model_path)
-
             return CachedModel(
                 predictor=predictor,
                 loaded_at=datetime.now(timezone.utc),
-                version=os.environ.get("MODEL_VERSION", "local"),
+                version="local_disk",
             )
         except Exception as e:
-            logger.error("Failed to load local model: %s", e)
+            logger.error(f"Disk load failed: {e}")
             return None
-    
-    # 3. Mock Logic
-    else:
-        logger.warning("Model not found at %s, using mock predictor", model_path)
+            
+    # 3. Mock (Last Resort)
+    logger.warning("No model found. Using Mock Predictor.")
+    predictor = DelayPredictor(ml_config)
+    return CachedModel(
+        predictor=predictor,
+        loaded_at=datetime.now(timezone.utc),
+        version="mock",
+    )
+
+def load_shadow_model() -> Optional[Any]:
+    """Load candidate model from Staging for Shadow Mode."""
+    if not ENABLE_SHADOW:
+        return None
+        
+    try:
+        # We assume 'DelayPredictor' can wrap any sklearn/xgboost object
+        # Ideally, we load the raw model from 'models:/<name>/Staging'
+        import mlflow
+        model_name = ml_config.model_name
+        model_uri = f"models:/{model_name}/Staging"
+        
+        logger.info(f"Attempting to load Shadow Model from {model_uri}...")
+        shadow_model = mlflow.sklearn.load_model(model_uri)
+        
+        # Wrap it in DelayPredictor to ensure consistent interface (.predict(X))
         predictor = DelayPredictor(ml_config)
-        return CachedModel(
-            predictor=predictor,
-            loaded_at=datetime.now(timezone.utc),
-            version="mock",
-        )
+        predictor._model = shadow_model
+        
+        logger.info("Shadow Model loaded successfully.")
+        return predictor
+    except Exception as e:
+        logger.warning(f"Failed to load Shadow Model: {e}. Shadow mode disabled.")
+        return None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle."""
-    global feature_service, cached_model, online_circuit, offline_circuit
+    global feature_service, cached_model, shadow_predictor, online_circuit, offline_circuit
 
-    otlp_endpoint = os.environ.get("OTLP_ENDPOINT")
-    init_tracer("transitflow-serving", otlp_endpoint)
+    # 1. Tracing
+    init_tracer("transitflow-serving", os.environ.get("OTLP_ENDPOINT"))
 
+    # 2. Circuit Breakers
     online_circuit = circuit_registry.get_or_create(
-        "online_store",
-        CircuitBreakerConfig(
-            failure_threshold=5,
-            timeout_seconds=30.0,
-        ),
+        "online_store", CircuitBreakerConfig(failure_threshold=5, timeout_seconds=30.0)
     )
     offline_circuit = circuit_registry.get_or_create(
-        "offline_store",
-        CircuitBreakerConfig(
-            failure_threshold=5,
-            timeout_seconds=30.0,
-        ),
+        "offline_store", CircuitBreakerConfig(failure_threshold=5, timeout_seconds=30.0)
     )
 
+    # 3. Feature Store Connection
     feature_service = FeatureService(feature_config)
     try:
         feature_service.connect()
+        logger.info("Feature Service connected.")
     except Exception as e:
-        logger.warning("Feature service connection failed: %s", e)
+        logger.error(f"Feature Service connection failed: {e}")
 
-    cached_model = load_model()
+    # 4. Model Loading (Production + Shadow)
+    cached_model = load_production_model()
+    shadow_model_instance = load_shadow_model()
 
-    logger.info("Serving API started")
+    # 5. Initialize Shadow Predictor
+    # This wrapper handles the async comparison logic
+    shadow_predictor = ShadowPredictor(
+        prod_model=cached_model.predictor if cached_model else None,
+        shadow_model=shadow_model_instance,
+        agreement_threshold=60.0 # 60 seconds tolerance
+    )
+
+    logger.info(f"Serving API Started (Shadow Mode: {shadow_predictor.enabled})")
     yield
 
     if feature_service:
         feature_service.close()
-    logger.info("Serving API stopped")
+    logger.info("Serving API Stopped")
 
 
 app = FastAPI(
     title="TransitFlow Prediction API",
-    description="Real-time delay predictions with circuit breaker protection",
-    version="1.0.0",
+    description="Real-time delay predictions with Shadow Mode",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
-
+# --- Middleware ---
 @app.middleware("http")
 async def add_trace_header(request: Request, call_next):
-    """Add trace ID to response headers."""
     response = await call_next(request)
     trace_id = get_tracer().get_current_trace_id()
     if trace_id:
         response.headers["X-Trace-ID"] = trace_id
     return response
 
-
+# --- Helper Functions ---
 def get_features_with_circuit_breaker(
     vehicle_id: int,
     stop_id: Optional[int],
@@ -214,182 +235,166 @@ def get_features_with_circuit_breaker(
 ) -> CombinedFeatures:
     """Get features with circuit breaker protection."""
     tracer = get_tracer()
-
     combined = CombinedFeatures(
         vehicle_id=vehicle_id,
         request_timestamp=int(datetime.now(timezone.utc).timestamp() * 1000),
     )
 
+    # Online Features (Redis)
     with tracer.span("get_online_features", {"vehicle_id": vehicle_id}):
-
-        def fetch_online():
-            return feature_service._online_store.get_features(vehicle_id)
-
-        def fallback_online():
-            return None
-
         try:
-            online = online_circuit.call(fetch_online, fallback_online)
-            if online:
-                combined.online = online
-                combined.online_available = True
-        except Exception as e:
-            logger.warning("Online features unavailable: %s", e)
+            if online_circuit.call(lambda: feature_service._online_store.is_healthy(), lambda: False):
+                online = feature_service._online_store.get_features(vehicle_id)
+                if online:
+                    combined.online = online
+                    combined.online_available = True
+        except Exception:
+            pass # Circuit breaker handles logging
 
+    # Offline Features (Postgres)
     if stop_id and line_id:
         with tracer.span("get_offline_features", {"stop_id": stop_id}):
             now = datetime.now(timezone.utc)
-            hour = hour_of_day if hour_of_day is not None else now.hour
-            day = day_of_week if day_of_week is not None else now.weekday()
-
-            def fetch_offline():
-                return feature_service._offline_store.get_stop_features(stop_id, line_id, hour, day)
-
-            def fallback_offline():
-                return None
-
+            h = hour_of_day if hour_of_day is not None else now.hour
+            d = day_of_week if day_of_week is not None else now.weekday()
+            
             try:
-                offline = offline_circuit.call(fetch_offline, fallback_offline)
-                if offline:
-                    combined.offline = offline
-                    combined.offline_available = True
-            except Exception as e:
-                logger.warning("Offline features unavailable: %s", e)
+                if offline_circuit.call(lambda: feature_service._offline_store.is_healthy(), lambda: False):
+                    offline = feature_service._offline_store.get_stop_features(stop_id, line_id, h, d)
+                    if offline:
+                        combined.offline = offline
+                        combined.offline_available = True
+            except Exception:
+                pass
 
     return combined
 
+# --- Endpoints ---
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check with circuit breaker status."""
-    circuit_states = {}
-    for name, stats in circuit_registry.get_all_stats().items():
-        circuit_states[name] = stats.state.value
-
-    feature_health = {}
-    if feature_service:
-        fs_health = feature_service.health_check()
-        feature_health = {
-            "online": fs_health.get("online_store", "unknown"),
-            "offline": fs_health.get("offline_store", "unknown"),
-        }
-
+    """Health check including Shadow Mode status."""
+    circuit_states = {k: v.state.value for k, v in circuit_registry.get_all_stats().items()}
+    
+    fs_health = feature_service.health_check() if feature_service else {}
+    
     return HealthResponse(
         status="healthy" if cached_model else "degraded",
         model_loaded=cached_model is not None,
         model_version=cached_model.version if cached_model else None,
-        feature_store=feature_health,
+        shadow_enabled=shadow_predictor.enabled if shadow_predictor else False,
+        feature_store={
+            "online": fs_health.get("online_store", "unknown"),
+            "offline": fs_health.get("offline_store", "unknown")
+        },
         circuit_breakers=circuit_states,
     )
 
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Expose Prometheus metrics."""
+    return Response(content=generate_latest(), media_type="text/plain")
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
     """
     Predict delay at next stop.
-
-    Uses circuit breakers for feature store resilience.
-    Falls back to default features if stores are unavailable.
+    Uses ShadowPredictor to transparently compare Staging vs Production.
     """
     tracer = get_tracer()
     start_time = time.perf_counter()
+    status = "success"
 
-    with tracer.span("predict", {"vehicle_id": request.vehicle_id}):
-        if not cached_model or not cached_model.predictor.is_trained:
-            if cached_model and cached_model.version == "mock":
-                predicted_delay = 0.0
-            else:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Model not loaded",
-                )
-        else:
-            with tracer.span("get_features"):
-                combined = get_features_with_circuit_breaker(
-                    vehicle_id=request.vehicle_id,
-                    stop_id=request.stop_id,
-                    line_id=request.line_id,
-                    hour_of_day=request.hour_of_day,
-                    day_of_week=request.day_of_week,
-                )
+    try:
+        # 1. Check Model Availability
+        if not cached_model:
+            raise HTTPException(status_code=503, detail="Model not loaded")
 
-            with tracer.span("model_inference"):
-                feature_vector = combined.to_feature_vector()
-                predicted_delay = cached_model.predictor.predict_single(feature_vector)
+        # 2. Fetch Features
+        with tracer.span("get_features"):
+            combined = get_features_with_circuit_breaker(
+                request.vehicle_id, request.stop_id, request.line_id,
+                request.hour_of_day, request.day_of_week
+            )
+            
+        # 3. Predict (Production + Async Shadow)
+        # Using the feature vector logic
+        features_dict = combined.to_feature_vector()
+        
+        with tracer.span("model_inference"):
+            # This returns Production result immediately
+            # Shadow result runs in background loop
+            prediction = await shadow_predictor.predict(features_dict, str(request.vehicle_id))
 
         latency_ms = (time.perf_counter() - start_time) * 1000
 
+        # 4. Record Standard Metrics
+        metrics.PREDICTION_LATENCY.labels(
+            model_version=cached_model.version, 
+            status=status
+        ).observe(latency_ms / 1000)
+        
+        metrics.PREDICTION_COUNT.labels(
+            model_version=cached_model.version, 
+            status=status
+        ).inc()
+
         return PredictionResponse(
             vehicle_id=request.vehicle_id,
-            predicted_delay_seconds=round(predicted_delay, 1),
+            predicted_delay_seconds=round(prediction, 1),
             prediction_timestamp=int(datetime.now(timezone.utc).timestamp() * 1000),
-            model_version=cached_model.version if cached_model else "none",
-            features_used=combined.to_feature_vector() if "combined" in dir() else {},
-            online_features_available=combined.online_available if "combined" in dir() else False,
-            offline_features_available=combined.offline_available if "combined" in dir() else False,
+            model_version=cached_model.version,
+            features_used=features_dict,
+            online_features_available=combined.online_available,
+            offline_features_available=combined.offline_available,
             latency_ms=round(latency_ms, 2),
             trace_id=tracer.get_current_trace_id(),
+            shadow_mode=shadow_predictor.enabled
         )
 
+    except Exception as e:
+        status = "error"
+        logger.error(f"Prediction failed: {e}")
+        metrics.PREDICTION_COUNT.labels(
+            model_version=cached_model.version if cached_model else "none", 
+            status=status
+        ).inc()
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/predict/{vehicle_id}")
-async def predict_get(
-    vehicle_id: int,
-    stop_id: Optional[int] = None,
-    line_id: Optional[str] = None,
-):
-    """GET endpoint for predictions (convenience)."""
-    request = PredictionRequest(
-        vehicle_id=vehicle_id,
-        stop_id=stop_id,
-        line_id=line_id,
-    )
-    return await predict(request)
+# --- Shadow Management Endpoints ---
+
+@app.post("/shadow/enable")
+async def enable_shadow():
+    """Runtime toggle: Enable Shadow Mode."""
+    if not shadow_predictor.shadow_model:
+        # Try to load it dynamically
+        shadow_predictor.shadow_model = load_shadow_model()
+        
+    if shadow_predictor.shadow_model:
+        shadow_predictor.enabled = True
+        return {"status": "enabled", "msg": "Shadow mode activated"}
+    return {"status": "failed", "msg": "Could not load shadow model"}
+
+@app.post("/shadow/disable")
+async def disable_shadow():
+    """Runtime toggle: Disable Shadow Mode."""
+    if shadow_predictor:
+        shadow_predictor.enabled = False
+    return {"status": "disabled"}
 
 
 @app.get("/circuits")
-async def get_circuit_states():
-    """Get detailed circuit breaker states."""
-    result = {}
-    for name, stats in circuit_registry.get_all_stats().items():
-        result[name] = {
-            "state": stats.state.value,
-            "failure_count": stats.failure_count,
-            "success_count": stats.success_count,
-            "total_calls": stats.total_calls,
-            "total_failures": stats.total_failures,
-            "total_short_circuits": stats.total_short_circuits,
+async def get_circuits():
+    """Expose rich circuit breaker stats for monitoring."""
+    stats = {}
+    for name, breaker in circuit_registry.get_all_stats().items():
+        stats[name] = {
+            "state": breaker.state.value,  # Script expects a dict with "state" key
+            "failures": breaker.failure_count,
+            "last_failure": str(breaker.last_failure_time) if breaker.last_failure_time else None
         }
-    return result
-
-
-@app.post("/circuits/reset")
-async def reset_circuits():
-    """Reset all circuit breakers to closed state."""
-    circuit_registry.reset_all()
-    return {"status": "ok", "message": "All circuits reset"}
-
-
-@app.get("/model")
-async def get_model_info():
-    """Get current model information."""
-    if not cached_model:
-        return {"loaded": False}
-
-    importance = {}
-    if cached_model.predictor.is_trained:
-        importance = cached_model.predictor.get_feature_importance()
-
-    return {
-        "loaded": True,
-        "version": cached_model.version,
-        "loaded_at": cached_model.loaded_at.isoformat(),
-        "is_trained": cached_model.predictor.is_trained,
-        "feature_importance": importance,
-    }
-
+    return stats
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8001)
