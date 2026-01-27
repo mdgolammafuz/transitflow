@@ -55,7 +55,7 @@ def check_ml_training():
 
         # Test single prediction with dict
         features = {col: 0.5 for col in config.feature_columns}
-        prediction = predictor.predict_single(features)
+        prediction = predictor.predict(features)
         print(f"  [OK] Sample prediction: {prediction:.1f}s")
 
         print("PASS: ML training works")
@@ -360,11 +360,11 @@ def main():
 
     if failed == 0 and passed > 0:
         print("\n" + "=" * 50)
-        print("PHASE 6 VERIFICATION: ALL CHECKS PASSED")
+        print("Serving VERIFICATION: ALL CHECKS PASSED")
         print("=" * 50)
     else:
         print("\n" + "=" * 50)
-        print("PHASE 6 VERIFICATION: INCOMPLETE")
+        print("Serving VERIFICATION: INCOMPLETE")
         print("=" * 50)
 
     sys.exit(0 if failed == 0 else 1)
