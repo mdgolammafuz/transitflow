@@ -1,15 +1,15 @@
 """
 ML Serving module.
 
-Pattern:
-Distributed Tracing
-Circuit Breaker
+Patterns:
+- Distributed Tracing
+- Circuit Breaker
+- Shadow Deployment [New]
 
 Provides:
-- Prediction API with circuit breaker protection
-- OpenTelemetry distributed tracing
-- Model caching and hot reload
-- Prediction logging to Kafka
+- Prediction API with resiliency
+- OpenTelemetry tracing
+- Shadow model validation
 """
 
 from serving.circuit_breaker import (
@@ -20,6 +20,7 @@ from serving.circuit_breaker import (
     circuit_registry,
 )
 from serving.tracing import Tracer, get_tracer, init_tracer
+from serving.shadow import ShadowPredictor
 
 __all__ = [
     "CircuitBreaker",
@@ -30,4 +31,5 @@ __all__ = [
     "Tracer",
     "get_tracer",
     "init_tracer",
+    "ShadowPredictor",
 ]
