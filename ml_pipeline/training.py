@@ -208,52 +208,59 @@ class DelayPredictor:
 
         return result
     
-    def predict_single(self, features: Dict[str, Any]) -> float:
+    def predict(self, features: Any) -> float:
         """
-        Make a prediction for a single feature vector.
-        
-        Args:
-            features: Dictionary of features from Feature Store
-            
-        Returns:
-            Predicted delay in seconds
+        Universal predict method. 
+        Handles:
+        1. Dictionary (Single API Request) -> Converts to DF -> Predicts
+        2. DataFrame/Array (Shadow Mode/MLflow) -> Predicts directly
         """
         if not self.is_trained:
             logger.warning("predict_called_on_untrained_model")
             return 0.0
 
-        # Convert single dict to DataFrame [1 row]
-        # We must align with the feature columns expected by the model
-        data = {}
-        for col in self._feature_columns:
-            val = features.get(col, 0)
-            data[col] = [val]
+        # --- CASE 1: API Request (Dictionary) ---
+        if isinstance(features, dict):
+            # Convert single dict to DataFrame [1 row]
+            data = {}
+            for col in self._feature_columns:
+                val = features.get(col, 0)
+                data[col] = [val]
             
-        df = pd.DataFrame(data)
-        
-        # Ensure numeric types strict check
-        # We raise error here so the API circuit breaker can detect data issues
-        for col in df.columns:
+            df = pd.DataFrame(data)
+            
+            # Ensure numeric types
+            for col in df.columns:
+                try:
+                    df[col] = pd.to_numeric(df[col], errors='raise')
+                except ValueError as e:
+                    logger.error("data_type_error", column=col, error=str(e))
+                    raise e
+            
             try:
-                df[col] = pd.to_numeric(df[col], errors='raise')
-            except ValueError as e:
-                logger.error("data_type_error", column=col, error=str(e))
+                if hasattr(self._model, "predict"):
+                    pred = self._model.predict(df)
+                    if isinstance(pred, (np.ndarray, list)):
+                        return float(pred[0])
+                    return float(pred)
+                elif isinstance(self._model, MockPredictor):
+                    pred = self._model.predict(df.values)
+                    return float(pred[0])
+            except Exception as e:
+                logger.error("prediction_execution_failed", error=str(e))
                 raise e
-            
-        # MLflow PyFunc models prefer DataFrames over raw values.
-        # Raw XGBoost/Sklearn models handle both.
-        try:
-            # Check if it's an MLflow wrapper (PyFuncModel) or native XGBoost
-            if hasattr(self._model, "predict"):
-                # Pass the DataFrame directly for MLflow compatibility
-                pred = self._model.predict(df)
-                return float(pred[0])
-            elif isinstance(self._model, MockPredictor):
-                pred = self._model.predict(df.values)
-                return float(pred[0])
-        except Exception as e:
-            logger.error("prediction_execution_failed", error=str(e))
-            raise e
+
+        # --- CASE 2: ML Tooling (DataFrame / Numpy Array) ---
+        else:
+            try:
+                pred = self._model.predict(features)
+                if isinstance(pred, (np.ndarray, list)):
+                    if len(pred) == 0: return 0.0
+                    return float(pred[0])
+                return float(pred)
+            except Exception as e:
+                logger.error("batch_prediction_failed", error=str(e))
+                raise e
             
         return 0.0
 
