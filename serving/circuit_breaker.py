@@ -1,17 +1,7 @@
 """
 Circuit Breaker Pattern.
-
-Pattern: Circuit Breaker
-
 Prevents cascading failures by failing fast when downstream services
 are unavailable. Implements three states: CLOSED, OPEN, HALF_OPEN.
-
-Interview talking point:
-"The Circuit Breaker prevents cascading failures. If Redis is down,
-we don't want every request to wait for a timeout. Instead, after
-5 failures, the circuit opens and we immediately return cached or
-default features. After 30 seconds, we try one request to check
-if the service recovered."
 """
 
 import logging
