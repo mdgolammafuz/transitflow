@@ -1,7 +1,7 @@
 """
 Schema validator for runtime message validation.
 Hardened: Uses 'fastavro' for robust logical type handling (timestamp-millis).
-Pattern: DE#1 - Ingestion is a Contract
+Pattern: Ingestion is a Contract
 """
 
 import logging
