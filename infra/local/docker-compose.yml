@@ -28,7 +28,7 @@ services:
       - ../../:/app
     # Install dependencies and run the script immediately
     command: >
-      /bin/bash -c "pip install --no-cache-dir requests confluent-kafka fastavro python-dotenv pydantic pydantic-settings prometheus-client &&
+      /bin/bash -c "pip install --no-cache-dir requests confluent-kafka fastavro python-dotenv pydantic pydantic-settings prometheus-client paho-mqtt &&
       python scripts/run_bridge.py --line 600"
     depends_on:
       redpanda:
