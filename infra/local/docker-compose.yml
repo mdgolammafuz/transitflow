@@ -13,6 +13,28 @@ x-app-env: &app-env
   METRICS_PORT: "8000"
 
 services:
+  # --- Ingestion Service (The Bridge) ---
+  producer:
+    image: python:3.10-slim
+    container_name: producer
+    working_dir: /app
+    environment:
+      <<: *app-env
+      PYTHONPATH: /app
+      # Ensure it knows how to reach Redpanda
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092" 
+    volumes:
+      # Mount the whole project so it sees scripts/ and src/
+      - ../../:/app
+    # Install dependencies and run the script immediately
+    command: >
+      /bin/bash -c "pip install --no-cache-dir requests confluent-kafka fastavro python-dotenv pydantic pydantic-settings && 
+      python scripts/run_bridge.py --line 600"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: always
+
   # --- Message Broker ---
   redpanda:
     image: redpandadata/redpanda:v23.3.3
