@@ -1,3 +1,10 @@
+# --- Global Logging Configuration ---
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-app-env: &app-env
   KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
   POSTGRES_HOST: "postgres"
@@ -18,6 +25,14 @@ services:
     image: python:3.10-slim
     container_name: producer
     working_dir: /app
+    # --- DNS ---
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      
+    # --- Logging ---
+    logging: *default-logging
+
     environment:
       <<: *app-env
       PYTHONPATH: /app
@@ -28,7 +43,7 @@ services:
       - ../../:/app
     # Install dependencies and run the script immediately
     command: >
-      /bin/bash -c "pip install --no-cache-dir requests confluent-kafka fastavro python-dotenv pydantic pydantic-settings prometheus-client paho-mqtt &&
+      /bin/bash -c "pip install --no-cache-dir requests confluent-kafka fastavro python-dotenv pydantic pydantic-settings prometheus-client paho-mqt &&
       python scripts/run_bridge.py --line 600"
     depends_on:
       redpanda:
@@ -54,6 +69,7 @@ services:
       - "9092:9092"
       - "9644:9644"
       - "8081:8081"
+    logging: *default-logging
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -71,6 +87,7 @@ services:
       SCHEMA_REGISTRY_URLS: http://redpanda:8081
     ports:
       - "8080:8080"
+    logging: *default-logging
     depends_on:
       redpanda:
         condition: service_healthy
@@ -82,6 +99,12 @@ services:
     container_name: flink-jobmanager
     ports:
       - "8082:8081"
+    
+    # --- DNS & Logging ---
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *default-logging
     command: >
       /bin/sh -c "
       mkdir -p /opt/flink/plugins/s3-fs-hadoop;
@@ -114,6 +137,11 @@ services:
   flink-taskmanager:
     image: flink:1.18.1-java11
     container_name: flink-taskmanager
+    # --- DNS & Logging ---
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *default-logging
     command: >
       /bin/sh -c "
       mkdir -p /opt/flink/plugins/s3-fs-hadoop;
@@ -143,6 +171,10 @@ services:
     container_name: mlflow
     ports:
       - "5001:5000"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *default-logging
     environment:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
@@ -164,6 +196,11 @@ services:
     image: apache/spark:3.5.0
     container_name: spark-master
     user: root
+    # --- DNS & Logging ---
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *default-logging
     environment:
       <<: *app-env
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
@@ -196,6 +233,11 @@ services:
     image: apache/spark:3.5.0
     container_name: spark-worker
     user: root
+    # --- DNS & Logging ---
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *default-logging
     environment:
       <<: *app-env
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
@@ -235,6 +277,7 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    logging: *default-logging
     volumes:
       - minio_data:/data
     healthcheck:
@@ -252,6 +295,7 @@ services:
         condition: service_healthy
     environment:
       MC_HOST_myminio: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    logging: *default-logging
     entrypoint: >
       /bin/sh -c "
       # Create primary bucket for Data Lakehouse & MLflow artifacts
@@ -274,6 +318,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
+    logging: *default-logging
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ${PWD}/init/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -289,6 +334,7 @@ services:
     command: redis-server --requirepass ${REDIS_PASSWORD}
     ports:
       - "6379:6379"
+    logging: *default-logging
     volumes:
       - redis_data:/data
     healthcheck:
@@ -301,6 +347,10 @@ services:
     image: python:3.10-slim
     container_name: dbt
     working_dir: /usr/app
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    logging: *default-logging
     environment:
       <<: *app-env
     volumes:
@@ -312,6 +362,7 @@ services:
     container_name: prometheus
     ports:
       - "9090:9090"
+    logging: *default-logging
     volumes:
       - ./init/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     command:
@@ -325,6 +376,7 @@ services:
     container_name: grafana
     ports:
       - "3000:3000"
+    logging: *default-logging
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
