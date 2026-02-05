@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Register Avro schemas with Schema Registry.
-Refactored Phase 4: Loads .avsc files from a configurable directory.
+Loads .avsc files from a configurable directory.
 """
 
 import argparse

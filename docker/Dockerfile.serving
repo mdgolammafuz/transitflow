@@ -1,0 +1,34 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 1. OS Dependencies (Speed up pandas/numpy)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Python Dependencies (Cached Layer)
+# This installs ALL the libraries our API needs once.
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    redis \
+    psycopg2-binary \
+    mlflow==2.10.2 \
+    boto3 \
+    pydantic \
+    pydantic-settings \
+    prometheus-client \
+    scikit-learn \
+    pandas \
+    numpy \
+    structlog \
+    xgboost \
+    opentelemetry-api \
+    opentelemetry-sdk \
+    opentelemetry-exporter-otlp
+
+# 3. Runtime
+# We don't copy code here because we mount it in docker-compose 
+# (for easy development)
+CMD ["uvicorn", "serving.api:app", "--host", "0.0.0.0", "--port", "8001"]

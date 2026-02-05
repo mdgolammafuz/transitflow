@@ -1,10 +1,13 @@
-# --- Global Logging Configuration ---
+version: '3.8'
+
+# --- Global Logging Configuration (Prevents Disk Full) ---
 x-logging: &default-logging
   driver: "json-file"
   options:
     max-size: "10m"
     max-file: "3"
 
+# --- Shared Environment Variables ---
 x-app-env: &app-env
   KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
   POSTGRES_HOST: "postgres"
@@ -20,35 +23,61 @@ x-app-env: &app-env
   METRICS_PORT: "8000"
 
 services:
-  # --- Ingestion Service (The Bridge) ---
+  # --- Ingestion Service ---
   producer:
     image: python:3.10-slim
     container_name: producer
     working_dir: /app
-    # --- DNS ---
     dns:
       - 8.8.8.8
       - 8.8.4.4
-      
-    # --- Logging ---
     logging: *default-logging
-
     environment:
       <<: *app-env
       PYTHONPATH: /app
-      # Ensure it knows how to reach Redpanda
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092" 
     volumes:
-      # Mount the whole project so it sees scripts/ and src/
       - ../../:/app
-    # Install dependencies and run the script immediately
     command: >
-      /bin/bash -c "pip install --no-cache-dir requests confluent-kafka fastavro python-dotenv pydantic pydantic-settings prometheus-client paho-mqt &&
+      /bin/bash -c "pip install --no-cache-dir requests confluent-kafka fastavro python-dotenv pydantic pydantic-settings prometheus-client paho-mqtt &&
       python scripts/run_bridge.py --line 600"
     depends_on:
       redpanda:
         condition: service_healthy
     restart: always
+
+  # --- Real-Time Inference API ---
+  serving-api:
+    build:
+      context: ../../
+      dockerfile: docker/Dockerfile.serving
+    container_name: serving-api
+    restart: always
+    working_dir: /app
+    ports:
+      - "8001:8001"
+    dns:
+      - 8.8.8.8
+    logging: *default-logging
+    environment:
+      <<: *app-env
+      # Connect to Cloud Infra
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_DEFAULT_REGION: us-east-1
+      # Enable Shadow Mode for safety
+      ENABLE_SHADOW: "true"
+      # Point to containers
+      FEATURE_API_URL: http://feature-api:8000
+      OTLP_ENDPOINT: http://jaeger:4317
+    volumes:
+      - ../../:/app
+    depends_on:
+      - redis
+      - postgres
+      - mlflow
 
   # --- Message Broker ---
   redpanda:
@@ -74,9 +103,10 @@ services:
       - redpanda_data:/var/lib/redpanda/data
     healthcheck:
       test: ["CMD", "rpk", "cluster", "health"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 60s
 
   redpanda-console:
     image: redpandadata/console:v2.4.3
@@ -93,14 +123,11 @@ services:
         condition: service_healthy
 
   # --- Stream Processing (Flink) ---
-  
   flink-jobmanager:
     image: flink:1.18.1-java11
     container_name: flink-jobmanager
     ports:
       - "8082:8081"
-    
-    # --- DNS & Logging ---
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -113,7 +140,6 @@ services:
       "
     environment:
       <<: *app-env
-      # Explicit Network Overrides for Internal Docker Communication
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
       REDIS_HOST: "redis"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
@@ -137,7 +163,6 @@ services:
   flink-taskmanager:
     image: flink:1.18.1-java11
     container_name: flink-taskmanager
-    # --- DNS & Logging ---
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -150,7 +175,6 @@ services:
       "
     environment:
       <<: *app-env
-      # Explicit Network Overrides for Internal Docker Communication
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:29092"
       REDIS_HOST: "redis"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
@@ -186,17 +210,20 @@ services:
       mlflow server --host 0.0.0.0 --port 5000 
       --backend-store-uri sqlite:///mlflow/mlflow.db 
       --default-artifact-root s3://transitflow-lakehouse/mlflow"
-    # Ensures MLflow waits for the storage layer to be fully operational
     depends_on:
       minio:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   # --- Batch Processing & ML Training (Spark) ---
   spark-master:
     image: apache/spark:3.5.0
     container_name: spark-master
     user: root
-    # --- DNS & Logging ---
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -233,7 +260,6 @@ services:
     image: apache/spark:3.5.0
     container_name: spark-worker
     user: root
-    # --- DNS & Logging ---
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -369,7 +395,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --web.enable-lifecycle
     extra_hosts:
-      - "host.docker.internal:host-gateway" # Required for Linux/some configs to reach host
+      - "host.docker.internal:host-gateway" 
 
   grafana:
     image: grafana/grafana:10.2.3
@@ -382,9 +408,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
     volumes:
       - grafana_data:/var/lib/grafana
-      # Maps the root of provisioning to the root of the container's provisioning
       - ../../grafana/provisioning:/etc/grafana/provisioning:ro
-      # Maps the actual JSON files
       - ../../grafana/dashboards:/var/lib/grafana/dashboards/transitflow:ro
   
 volumes:
