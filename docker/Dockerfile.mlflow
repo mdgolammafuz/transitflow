@@ -1,0 +1,24 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# 1. Install System Dependencies (Added curl for Healthcheck)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Install Python Dependencies ONCE
+# Quotes required for < > characters
+RUN pip install --no-cache-dir \
+    mlflow==2.10.2 \
+    boto3 \
+    psycopg2-binary \
+    "pandas<3" \
+    "numpy<2"
+
+# 3. Default command
+CMD ["mlflow", "server", \
+     "--host", "0.0.0.0", \
+     "--port", "5000", \
+     "--backend-store-uri", "sqlite:///mlflow/mlflow.db", \
+     "--default-artifact-root", "s3://transitflow-lakehouse/mlflow"]
