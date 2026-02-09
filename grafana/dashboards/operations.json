@@ -27,7 +27,7 @@
       },
       "targets": [
         {
-          "expr": "rate(transitflow_predictions_total[1m])",
+          "expr": "rate(transitflow_prediction_latency_seconds_count[1m])",
           "legendFormat": "Total QPS"
         }
       ],
