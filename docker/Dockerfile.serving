@@ -1,14 +1,21 @@
+# Base Image
 FROM python:3.10-slim
 
+# Set working directory
 WORKDIR /app
 
-# 1. OS Dependencies (Speed up pandas/numpy)
+# Ensure Python looks in /app for modules
+ENV PYTHONPATH=/app
+
+# 1. OS Dependencies
+# Added 'curl' so Docker Healthchecks can ping the API
 RUN apt-get update && apt-get install -y \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Python Dependencies (Cached Layer)
-# This installs ALL the libraries our API needs once.
+# Installing libraries individually to ensure build caching works efficiently
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
@@ -28,7 +35,13 @@ RUN pip install --no-cache-dir \
     opentelemetry-sdk \
     opentelemetry-exporter-otlp
 
+# --- COPY PROJECT FILES ---
+# Copying specifically what we need keeps the image smaller and build cleaner
+COPY ml_pipeline /app/ml_pipeline
+COPY serving /app/serving
+COPY feature_store /app/feature_store
+# --------------------------
+
 # 3. Runtime
-# We don't copy code here because we mount it in docker-compose 
-# (for easy development)
+# Host 0.0.0.0 is required for container networking
 CMD ["uvicorn", "serving.api:app", "--host", "0.0.0.0", "--port", "8001"]
