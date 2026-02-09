@@ -7,13 +7,15 @@ scrape_configs:
   - job_name: 'transitflow-api'
     metrics_path: '/metrics'
     static_configs:
-      - targets: ['host.docker.internal:8001']
+      - targets: ['serving-api:8001']
 
+  # OPTIONAL: If Ingestion is also in docker, use 'producer:8000'
+  # If it's running on Mac via 'make run', keep host.docker.internal
   - job_name: 'transit-ingestion'
     metrics_path: '/metrics'
     static_configs:
-      - targets: ['host.docker.internal:8000']
-
+      - targets: ['producer:8000']
+        
   - job_name: 'redpanda'
     static_configs:
       - targets: ['redpanda:9644']
