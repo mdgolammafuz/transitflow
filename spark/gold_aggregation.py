@@ -123,7 +123,6 @@ def aggregate_hourly_metrics(spark: SparkSession, config, target_date: str):
     validate_source(spark, silver_path, "Silver Enriched")
     
     try:
-        # Load Silver - by now the 'timestamp' ghost is gone from Silver
         silver_df = spark.read.format("delta").load(silver_path).filter(col("date") == target_date)
 
         hourly_df = (
