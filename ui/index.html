@@ -1,0 +1,531 @@
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TransitFlow - Real-Time Predictions</title>
+    <style>
+      :root {
+        --primary: #2563eb;
+        --primary-dark: #1d4ed8;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --text: #1e293b;
+        --text-muted: #64748b;
+        --border: #e2e8f0;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+      }
+
+      /* Header */
+      header {
+        background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+        color: white;
+        padding: 1.5rem;
+        text-align: center;
+      }
+
+      header h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+      }
+
+      header p {
+        opacity: 0.9;
+        font-size: 1rem;
+      }
+
+      /* Layout */
+      main {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 2rem;
+      }
+
+      section {
+        margin-bottom: 2rem;
+      }
+
+      h2 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      /* Stats */
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 1rem;
+      }
+
+      .stat {
+        background: var(--card);
+        padding: 1rem;
+        border-radius: 8px;
+        text-align: center;
+        border: 1px solid var(--border);
+      }
+
+      .stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--primary);
+      }
+
+      .stat-label {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+      }
+
+      /* Prediction Card */
+      .card {
+        background: var(--card);
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        border: 1px solid var(--border);
+      }
+
+      .form-row {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+
+      .form-row input {
+        flex: 1;
+        padding: 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 1rem;
+      }
+
+      .btn {
+        padding: 0.75rem 1.5rem;
+        background: var(--primary);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        background: var(--primary-dark);
+      }
+
+      .btn:disabled {
+        opacity: 0.5;
+      }
+
+      /* Results */
+      .result {
+        background: #f1f5f9;
+        border-radius: 8px;
+        padding: 1.5rem;
+        display: none;
+        margin-top: 1rem;
+        border: 1px solid var(--border);
+      }
+
+      .result.show {
+        display: block;
+        animation: fadeIn 0.3s ease;
+      }
+
+      .result-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1rem;
+        text-align: center;
+      }
+
+      .result-value {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .result-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+      }
+
+      .delay-high {
+        color: var(--danger);
+      }
+
+      .delay-low {
+        color: var(--success);
+      }
+
+      /* Live Feed Table */
+      .table-container {
+        max-height: 300px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        background: #f8fafc;
+        padding: 0.75rem;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 1px solid #e2e8f0;
+      }
+
+      td {
+        padding: 0.75rem;
+        border-bottom: 1px solid #f1f5f9;
+      }
+
+      /* Interactive Rows */
+      tbody tr {
+        cursor: pointer;
+        transition: background 0.1s;
+      }
+
+      tbody tr:hover {
+        background-color: #eff6ff;
+      }
+
+      .select-hint {
+        font-size: 0.75rem;
+        color: var(--primary);
+        opacity: 0;
+        transition: opacity 0.2s;
+      }
+
+      tbody tr:hover .select-hint {
+        opacity: 1;
+      }
+
+      /* Status Badges */
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.25rem 0.5rem;
+        border-radius: 99px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .status-ok {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .status-err {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      /* Quick Links */
+      .links {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        margin-top: 2rem;
+      }
+
+      .links a {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        text-decoration: none;
+      }
+
+      .links a:hover {
+        color: var(--primary);
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+
+    <header>
+      <h1>TransitFlow</h1>
+      <p>Real-Time Transit Intelligence</p>
+    </header>
+
+    <main>
+      <section>
+        <h2>System Health</h2>
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-value" id="modelStatus">--</div>
+            <div class="stat-label">Model Status</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="vehicleCount">--</div>
+            <div class="stat-label">Active Buses</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="featureStoreStatus">--</div>
+            <div class="stat-label">Feature Store</div>
+          </div>
+        </div>
+      </section>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+
+        <section>
+          <h2>Select Active Vehicle</h2>
+          <div class="card" style="padding: 0;">
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Vehicle ID</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="vehicleFeed">
+                  <tr>
+                    <td colspan="2" style="text-align:center; padding: 1rem;">Loading live feed...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Predict Delay</h2>
+          <div class="card">
+            <div class="form-row">
+              <input type="text" id="vehicleId" placeholder="Click a vehicle on the left..." readonly />
+              <button class="btn" id="predictBtn" onclick="predict()" disabled>Predict</button>
+            </div>
+
+            <div class="result" id="result">
+              <div class="result-grid">
+                <div>
+                  <div class="result-value" id="predDelay">--</div>
+                  <div class="result-label">Predicted Delay</div>
+                </div>
+                <div>
+                  <div class="result-value" id="predLatency">--</div>
+                  <div class="result-label">Latency</div>
+                </div>
+                <div>
+                  <div class="result-value" id="predFeatures">--</div>
+                  <div class="result-label">Data Sources</div>
+                </div>
+                <div>
+                  <div class="result-value" id="predShadow">--</div>
+                  <div class="result-label">Shadow Mode</div>
+                </div>
+              </div>
+              <div style="margin-top: 1rem; text-align: center; font-size: 0.8rem; color: var(--text-muted);">
+                Route ID: <span id="predRoute">--</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <div class="links">
+        <a href="http://localhost:3000/dashboards/f/transitflow/transitflow" target="_blank">📊 Grafana Dashboards</a>
+      
+        <a href="http://localhost:9090" target="_blank">📈 Prometheus Metrics</a>
+      
+        <a href="http://localhost:8001/docs" target="_blank">📖 API Documentation</a>
+      </div>
+
+    </main>
+
+    <script>
+      const API_BASE = '/api';
+
+      async function fetchStats ()
+      {
+        try
+        {
+          const res = await fetch( `${ API_BASE }/health` );
+          const data = await res.json();
+
+          // Model Status
+          document.getElementById( 'modelStatus' ).innerHTML =
+            data.status === 'healthy'
+              ? '<span class="status-badge status-ok">ONLINE</span>'
+              : '<span class="status-badge status-err">DEGRADED</span>';
+
+          // Feature Store Status
+          const fsOnline = data.feature_store?.online === 'healthy';
+          const fsOffline = data.feature_store?.offline === 'healthy';
+
+          document.getElementById( 'featureStoreStatus' ).innerHTML =
+            ( fsOnline && fsOffline )
+              ? '<span class="status-badge status-ok">CONNECTED</span>'
+              : '<span class="status-badge status-err">PARTIAL</span>';
+
+        } catch ( e )
+        {
+          document.getElementById( 'modelStatus' ).innerHTML = '<span class="status-badge status-err">OFFLINE</span>';
+        }
+      }
+
+      async function fetchVehicles ()
+      {
+        try
+        {
+          // Fetch REAL data from the new endpoint
+          const res = await fetch( `${ API_BASE }/vehicles/active` );
+          if ( !res.ok ) throw new Error( "Failed to fetch vehicles" );
+
+          const vehicles = await res.json();
+          document.getElementById( 'vehicleCount' ).textContent = vehicles.length;
+
+          const tbody = document.getElementById( 'vehicleFeed' );
+
+          if ( vehicles.length === 0 )
+          {
+            tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; padding:1rem">No active vehicles found in Redis.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = vehicles.map( v => `
+          <tr onclick="selectVehicle('${ v.vehicle_id }')">
+            <td>
+              <strong>${ v.vehicle_id }</strong>
+            </td>
+            <td>
+              <span class="select-hint">Select →</span>
+            </td>
+          </tr>
+        `).join( '' );
+
+        } catch ( e )
+        {
+          console.error( 'Vehicle fetch error:', e );
+          document.getElementById( 'vehicleFeed' ).innerHTML = '<tr><td colspan="2" style="text-align:center; color:red">Connection Error</td></tr>';
+        }
+      }
+
+      function selectVehicle ( id )
+      {
+        document.getElementById( 'vehicleId' ).value = id;
+        document.getElementById( 'predictBtn' ).disabled = false;
+        document.getElementById( 'predictBtn' ).click(); // Auto-trigger
+      }
+
+      async function predict ()
+      {
+        const vehicleId = document.getElementById( 'vehicleId' ).value;
+        const btn = document.getElementById( 'predictBtn' );
+
+        btn.innerHTML = 'Thinking...';
+        btn.disabled = true;
+
+        try
+        {
+          const res = await fetch( `${ API_BASE }/predict`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify( { vehicle_id: vehicleId } )
+          } );
+
+          const data = await res.json();
+
+          document.getElementById( 'result' ).classList.add( 'show' );
+
+          // --- : Delay Formatting ---
+          const delay = data.predicted_delay_seconds;
+          const delayEl = document.getElementById( 'predDelay' );
+
+          if ( Math.abs( delay ) < 1 )
+          {
+            delayEl.textContent = "On Time";
+            delayEl.className = "result-value delay-low";
+          } else
+          {
+            delayEl.textContent = `${ delay > 0 ? '+' : '' }${ delay }s`;
+            delayEl.className = `result-value ${ Math.abs( delay ) > 60 ? 'delay-high' : 'delay-low' }`;
+          }
+
+          // Metadata
+          document.getElementById( 'predLatency' ).textContent = `${ data.latency_ms.toFixed( 0 ) }ms`;
+          document.getElementById( 'predShadow' ).textContent = data.shadow_mode ? 'Active' : 'Off';
+
+          // --- : Route ID Logic ---
+          document.getElementById( 'predRoute' ).textContent = data.route_id || 'Unknown';
+
+          // --- : Business Value Badges ---
+          let sources = [];
+          if ( data.online_features_available )
+          {
+            sources.push( '<span class="status-badge status-ok">LIVE</span>' );
+          }
+          if ( data.offline_features_available )
+          {
+            sources.push( '<span class="status-badge" style="background:#e0f2fe; color:#0369a1">HISTORY</span>' );
+          }
+          document.getElementById( 'predFeatures' ).innerHTML = sources.join( ' ' ) || '<span style="color:gray">None</span>';
+
+        } catch ( e )
+        {
+          alert( 'Prediction Error' );
+        } finally
+        {
+          btn.innerHTML = 'Predict';
+          btn.disabled = false;
+        }
+      }
+
+      // Initial Load
+      fetchStats();
+      fetchVehicles();
+
+      // Refresh loop
+      setInterval( fetchStats, 5000 );
+      setInterval( fetchVehicles, 5000 );
+    </script>
+  </body>
+
+</html>
+
+```
