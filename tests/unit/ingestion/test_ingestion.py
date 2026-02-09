@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.ingestion.models import InvalidEvent, RawHSLPayload, VehiclePosition
+from ingestion.models import InvalidEvent, RawHSLPayload, VehiclePosition
 
 
 class TestVehiclePosition:

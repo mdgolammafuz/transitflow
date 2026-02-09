@@ -10,10 +10,10 @@ import sys
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.ingestion.bridge import Bridge, setup_logging
+from ingestion.bridge import Bridge, setup_logging
 
 # Import get_settings here to keep the top-level clean
-from src.ingestion.config import get_settings
+from ingestion.config import get_settings
 
 
 def main():

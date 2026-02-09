@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 # PYTHONPATH=. must be set in the Makefile for this import to work
-from src.schema_registry.client import SchemaRegistryClient, SchemaRegistryError
+from schema_registry.client import SchemaRegistryClient, SchemaRegistryError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

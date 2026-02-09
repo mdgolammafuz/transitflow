@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 
 # Ensure we can import from src
 try:
-    from src.ingestion.config import get_settings
-    from src.ingestion.models import RawHSLPayload, VehiclePosition
-    from src.ingestion.producer import TelemetryProducer
+    from ingestion.config import get_settings
+    from ingestion.models import RawHSLPayload, VehiclePosition
+    from ingestion.producer import TelemetryProducer
 except ImportError:
     print("CRITICAL: src.ingestion not found. Run from project root.")
     print("Ensure you have run: pip install -e .")

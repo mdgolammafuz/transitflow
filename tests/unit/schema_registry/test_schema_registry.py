@@ -4,8 +4,8 @@ Tests the fastavro integration without external dependencies.
 """
 
 import pytest
-from src.schema_registry.client import SchemaRegistryClient, SchemaRegistryError
-from src.schema_registry.validator import SchemaValidator
+from schema_registry.client import SchemaRegistryClient, SchemaRegistryError
+from schema_registry.validator import SchemaValidator
 
 class TestSchemaRegistryClient:
     """Tests for hardened SchemaRegistryClient."""

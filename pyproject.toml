@@ -45,6 +45,8 @@ dependencies = [
     "opentelemetry-sdk>=1.22.0",
     "opentelemetry-instrumentation-fastapi>=0.43b0",
     "opentelemetry-exporter-otlp>=1.22.0",
+    # Required for Python 3.12+ because pkg_resources was removed from stdlib
+    "setuptools<80.0.0",
 ]
 
 [project.optional-dependencies]
@@ -67,7 +69,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]  # Look in the root directory
+include = ["ingestion*", "schema_registry*", "feature_store*", "serving*", "ml_pipeline*"]
+exclude = ["tests*", "scripts*", "infra*", "docker*", "ui*"]
 
 [tool.black]
 line-length = 100
