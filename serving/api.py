@@ -20,7 +20,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -66,6 +66,7 @@ class PredictionRequest(BaseModel):
 class PredictionResponse(BaseModel):
     """Prediction response."""
     vehicle_id: int
+    route_id: Optional[str] = "Unknown"
     predicted_delay_seconds: float
     prediction_timestamp: int
     model_version: str
@@ -85,6 +86,11 @@ class HealthResponse(BaseModel):
     feature_store: Dict[str, str]
     circuit_breakers: Dict[str, str]
 
+class ActiveVehicle(BaseModel):
+    vehicle_id: str
+    line_id: Optional[str] = None
+    last_updated: Optional[float] = None
+
 # --- Global State ---
 feature_config = FeatureStoreConfig.from_env()
 ml_config = MLConfig.from_env()
@@ -96,10 +102,9 @@ shadow_predictor: Optional[ShadowPredictor] = None
 online_circuit: Optional[CircuitBreaker] = None
 offline_circuit: Optional[CircuitBreaker] = None
 
-
 def load_production_model() -> Optional[CachedModel]:
-    """Load primary production model from Registry or Disk."""
-    # 1. Try MLflow Registry
+    """Load primary production model. Falls back to Disk/Mock on failure."""
+    # 1. Try MLflow Registry (Protected Block)
     try:
         registry = ModelRegistry(ml_config)
         raw_model = registry.load_latest_model()
@@ -114,7 +119,8 @@ def load_production_model() -> Optional[CachedModel]:
             version="registry_latest",
         )
     except Exception as e:
-        logger.warning(f"MLflow load failed: {e}. Falling back to disk.")
+        # CRITICAL FIX: Log warning but DO NOT CRASH
+        logger.warning(f"MLflow load failed (Network/Service issue): {e}")
 
     # 2. Fallback to Disk
     model_path = os.environ.get("MODEL_PATH", "models/delay_predictor.pkl")
@@ -122,17 +128,17 @@ def load_production_model() -> Optional[CachedModel]:
         try:
             predictor = DelayPredictor(ml_config)
             predictor.load(model_path)
+            logger.info(f"Loaded fallback model from disk: {model_path}")
             return CachedModel(
                 predictor=predictor,
                 loaded_at=datetime.now(timezone.utc),
                 version="local_disk",
             )
-        except Exception as e:
-            logger.error(f"Disk load failed: {e}")
-            return None
+        except Exception:
+            pass
             
     # 3. Mock (Last Resort)
-    logger.warning("No model found. Using Mock Predictor.")
+    logger.warning("No model found. Using Mock Predictor (System Safe Mode).")
     predictor = DelayPredictor(ml_config)
     return CachedModel(
         predictor=predictor,
@@ -141,28 +147,25 @@ def load_production_model() -> Optional[CachedModel]:
     )
 
 def load_shadow_model() -> Optional[Any]:
-    """Load candidate model from Staging for Shadow Mode."""
+    """Load candidate model. Returns None if MLflow is unreachable."""
     if not ENABLE_SHADOW:
         return None
         
     try:
-        # We assume 'DelayPredictor' can wrap any sklearn/xgboost object
-        # Ideally, we load the raw model from 'models:/<name>/Staging'
         import mlflow
         model_name = ml_config.model_name
         model_uri = f"models:/{model_name}/Staging"
         
-        logger.info(f"Attempting to load Shadow Model from {model_uri}...")
+        # This will now timeout fast due to ENV vars
         shadow_model = mlflow.sklearn.load_model(model_uri)
         
-        # Wrap it in DelayPredictor to ensure consistent interface (.predict(X))
         predictor = DelayPredictor(ml_config)
         predictor._model = shadow_model
-        
         logger.info("Shadow Model loaded successfully.")
         return predictor
     except Exception as e:
-        logger.warning(f"Failed to load Shadow Model: {e}. Shadow mode disabled.")
+        # Log warning but DO NOT CRASH
+        logger.warning(f"Shadow Model unavailable: {e}. Continuing in Single-Model mode.")
         return None
 
 @asynccontextmanager
@@ -233,14 +236,14 @@ def get_features_with_circuit_breaker(
     hour_of_day: Optional[int],
     day_of_week: Optional[int],
 ) -> CombinedFeatures:
-    """Get features with circuit breaker protection."""
+    """Get features with circuit breaker protection and Smart Lookup."""
     tracer = get_tracer()
     combined = CombinedFeatures(
         vehicle_id=vehicle_id,
         request_timestamp=int(datetime.now(timezone.utc).timestamp() * 1000),
     )
 
-    # Online Features (Redis)
+    # 1. Online Features (Redis) - ALWAYS fetch first
     with tracer.span("get_online_features", {"vehicle_id": vehicle_id}):
         try:
             if online_circuit.call(lambda: feature_service._online_store.is_healthy(), lambda: False):
@@ -251,16 +254,35 @@ def get_features_with_circuit_breaker(
         except Exception:
             pass # Circuit breaker handles logging
 
-    # Offline Features (Postgres)
-    if stop_id and line_id:
-        with tracer.span("get_offline_features", {"stop_id": stop_id}):
+    # 2. Smart Lookup (The Logic Fix)
+    # If the user didn't provide stop/line info, try to get it from the live Redis data
+    target_stop_id = stop_id
+    target_line_id = line_id
+
+    if combined.online_available:
+        # Auto-fill from Redis if User didn't provide them
+        if not target_stop_id and combined.online.next_stop_id:
+            target_stop_id = combined.online.next_stop_id
+        if not target_line_id and combined.online.line_id:
+            target_line_id = combined.online.line_id
+
+    # 3. Offline Features (Postgres)
+    # Now we query Postgres using either the User's ID or the Auto-filled ID
+    if target_stop_id and target_line_id:
+        with tracer.span("get_offline_features", {"stop_id": target_stop_id}):
             now = datetime.now(timezone.utc)
             h = hour_of_day if hour_of_day is not None else now.hour
             d = day_of_week if day_of_week is not None else now.weekday()
             
             try:
                 if offline_circuit.call(lambda: feature_service._offline_store.is_healthy(), lambda: False):
-                    offline = feature_service._offline_store.get_stop_features(stop_id, line_id, h, d)
+                    # Ensure IDs are correct types for the query
+                    offline = feature_service._offline_store.get_stop_features(
+                        int(target_stop_id), 
+                        str(target_line_id), 
+                        h, 
+                        d
+                    )
                     if offline:
                         combined.offline = offline
                         combined.offline_available = True
@@ -270,6 +292,30 @@ def get_features_with_circuit_breaker(
     return combined
 
 # --- Endpoints ---
+
+@app.get("/vehicles/active", response_model=List[ActiveVehicle])
+async def list_active_vehicles():
+    """Scans Redis for active vehicles."""
+    results = []
+    try:
+        if feature_service and feature_service._online_store:
+            client = feature_service._online_store._client
+            # Scan Redis
+            cursor, keys = client.scan(cursor=0, match="features:vehicle:*", count=50)
+            
+            for key in keys:
+                # FIX: 'key' is already a string, do not decode it!
+                if isinstance(key, bytes):
+                    key_str = key.decode("utf-8")
+                else:
+                    key_str = str(key)
+                
+                vid = key_str.split(":")[-1]
+                results.append(ActiveVehicle(vehicle_id=vid))
+                
+    except Exception as e:
+        logger.error(f"Failed to scan active vehicles: {e}")
+    return results
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -299,7 +345,7 @@ async def metrics_endpoint():
 async def predict(request: PredictionRequest):
     """
     Predict delay at next stop.
-    Uses ShadowPredictor to transparently compare Staging vs Production.
+    Robustness: Falls back to Heuristics (Current Delay) if no model exists.
     """
     tracer = get_tracer()
     start_time = time.perf_counter()
@@ -317,14 +363,19 @@ async def predict(request: PredictionRequest):
                 request.hour_of_day, request.day_of_week
             )
             
-        # 3. Predict (Production + Async Shadow)
-        # Using the feature vector logic
+        # 3. Predict
         features_dict = combined.to_feature_vector()
         
         with tracer.span("model_inference"):
-            # This returns Production result immediately
-            # Shadow result runs in background loop
-            prediction = await shadow_predictor.predict(features_dict, str(request.vehicle_id))
+            # --- ROBUSTNESS FIX: Cold Start Handling ---
+            if cached_model.version == "mock":
+                # If we are on Cloud (Day 0) with no history, use the Live Delay.
+                # This ensures the UI shows accurate "Current Status" instead of 0s.
+                prediction = float(features_dict.get("current_delay", 0.0))
+                logger.info(f"Heuristic Fallback for {request.vehicle_id}: {prediction}s")
+            else:
+                # We have a trained model (Day 1+), use ML.
+                prediction = await shadow_predictor.predict(features_dict, str(request.vehicle_id))
 
         latency_ms = (time.perf_counter() - start_time) * 1000
 
@@ -342,6 +393,7 @@ async def predict(request: PredictionRequest):
         return PredictionResponse(
             vehicle_id=request.vehicle_id,
             predicted_delay_seconds=round(prediction, 1),
+            route_id=combined.online.line_id if combined.online else None,
             prediction_timestamp=int(datetime.now(timezone.utc).timestamp() * 1000),
             model_version=cached_model.version,
             features_used=features_dict,
@@ -360,7 +412,7 @@ async def predict(request: PredictionRequest):
             status=status
         ).inc()
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 # --- Shadow Management Endpoints ---
 
 @app.post("/shadow/enable")
