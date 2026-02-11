@@ -13,7 +13,8 @@ DATE ?= $(shell date +%Y-%m-%d)
 # Local connectivity constants
 REGISTRY_URL := $(if $(SCHEMA_REGISTRY_URL),$(SCHEMA_REGISTRY_URL),http://localhost:8081)
 SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.6.0"
-
+# Detect TTY: Use '-it' if human, '-i' if CI/Automation
+INTERACTIVE := $(shell [ -t 0 ] && echo "it" || echo "i")
 # --- Environment Contexts ---
 
 # LOCAL_ENV: For tools running directly on your Mac (dbt, API, Scripts, Serving)
@@ -43,7 +44,7 @@ DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
 DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
 
 # Spark execution wrapper (Container-based)
-SPARK_SUBMIT := docker exec -it --env-file infra/local/.env \
+SPARK_SUBMIT := docker exec -$(INTERACTIVE) --env-file infra/local/.env \
   -e KAFKA_BOOTSTRAP_SERVERS=redpanda:29092 \
   -e POSTGRES_HOST=postgres \
   -e MINIO_ENDPOINT=http://minio:9000 \
@@ -98,16 +99,16 @@ dev-up:
 	@sleep 15
 	@$(MAKE) topics
 	@echo "Ensuring Lakehouse bucket exists..."
-	@docker exec -it minio mc alias set local http://localhost:9000 minioadmin minioadmin > /dev/null
-	@docker exec -it minio mc mb local/$(LAKEHOUSE_BUCKET) || true
+	@docker exec -$(INTERACTIVE) minio mc alias set local http://localhost:9000 minioadmin minioadmin > /dev/null
+	@docker exec -$(INTERACTIVE) minio mc mb local/$(LAKEHOUSE_BUCKET) || true
 
 dev-down:
 	cd infra/local && docker compose down
 
 topics:
 	@echo "Creating Kafka topics..."
-	docker exec -it redpanda rpk topic create fleet.telemetry.raw fleet.enriched fleet.stop_events --partitions 8 2>/dev/null || true
-	docker exec -it redpanda rpk topic create fleet.telemetry.dlq --partitions 1 2>/dev/null || true
+	docker exec -$(INTERACTIVE) redpanda rpk topic create fleet.telemetry.raw fleet.enriched fleet.stop_events --partitions 8 2>/dev/null || true
+	docker exec -$(INTERACTIVE) redpanda rpk topic create fleet.telemetry.dlq --partitions 1 2>/dev/null || true
 
 # --- Quality Assurance ---
 lint:
@@ -146,17 +147,17 @@ flink-build:
 	cp flink/target/transitflow-flink-1.0.0.jar infra/local/flink-jobs/
 
 flink-list:
-	docker exec -it flink-jobmanager flink list
+	docker exec -$(INTERACTIVE) flink-jobmanager flink list
 
 flink-stop:
 	@echo "Stopping all running Flink jobs..."
-	docker exec -it flink-jobmanager bash -c "flink list | grep RUNNING | cut -d ' ' -f 4 | xargs -r flink cancel"
+	docker exec -$(INTERACTIVE) flink-jobmanager bash -c "flink list | grep RUNNING | cut -d ' ' -f 4 | xargs -r flink cancel"
 
 flink-deploy: flink-build flink-stop flink-submit
 
 # MANUAL SUBMIT: Uses the shared volume mapping in docker-compose
 flink-submit:
-	docker exec -it flink-jobmanager flink run -d /opt/flink/jobs/transitflow-flink-1.0.0.jar
+	docker exec -$(INTERACTIVE) flink-jobmanager flink run -d /opt/flink/jobs/transitflow-flink-1.0.0.jar
 
 # --- Delta Lake Processing (Spark) ---
 
@@ -190,11 +191,11 @@ spark-maintenance:
     
 spark-test:
 	@echo "Running Spark Unit Tests inside container..."
-	docker exec -it spark-master /usr/local/bin/pytest /opt/spark/jobs/tests/unit/spark/
+	docker exec -$(INTERACTIVE) spark-master /usr/local/bin/pytest /opt/spark/jobs/tests/unit/spark/
 
 # --- Data Contracts & Warehouse (dbt) ---
 
-# Fixed: Added backslashes for multi-line variable definition
+# Added backslashes for multi-line variable definition
 DBT_ENV = cd dbt && DBT_PROFILES_DIR=. \
   POSTGRES_USER=$(POSTGRES_USER) \
   POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
@@ -259,8 +260,8 @@ verify-pipeline:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_pipeline.py --check-all
   
 lakehouse-ls:
-	@docker exec -it minio /usr/bin/mc alias set myminio http://localhost:9000 $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) > /dev/null
-	@docker exec -it minio /usr/bin/mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
+	@docker exec -$(INTERACTIVE) minio /usr/bin/mc alias set myminio http://localhost:9000 $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) > /dev/null
+	@docker exec -$(INTERACTIVE) minio /usr/bin/mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
 
 # --- Feature Store & ML Serving ---
 feature-api:
@@ -281,7 +282,7 @@ feature-test:
 
 train-model-locally:
 	@echo "Starting ML Training Pipeline (Docker execution)..."
-	docker exec -it serving-api python scripts/verify_train_model.py
+	docker exec -$(INTERACTIVE) serving-api python scripts/verify_train_model.py
   
 serving-api:
 	@echo "Starting ML Serving API..."

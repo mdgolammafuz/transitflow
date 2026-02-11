@@ -6,7 +6,6 @@ Pattern: Distributed Tracing
 Provides request tracing across services for debugging and performance
 analysis.
 
-Interview talking point:
 "OpenTelemetry gives us distributed tracing. Each prediction request
 gets a trace ID that follows through Feature Store calls, model
 inference, and Kafka logging. When latency spikes, we can see exactly
