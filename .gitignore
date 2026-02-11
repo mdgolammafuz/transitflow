@@ -6,7 +6,8 @@
 *.key
 secrets/
 credentials/
-
+github_deploy_key
+github_deploy_key.pub
 # Python
 __pycache__/
 *.py[cod]
