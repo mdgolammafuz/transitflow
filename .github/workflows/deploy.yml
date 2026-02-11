@@ -70,7 +70,7 @@ jobs:
 
             # 3. Smoke Test
             if docker ps | grep -q "serving-api"; then
-                docker exec -T serving-api python scripts/verify_ml_serving.py
+                docker exec serving-api python scripts/verify_ml_serving.py
             else
                 echo "WARNING: Container 'serving-api' not found. Checking generic docker ps..."
                 docker ps
