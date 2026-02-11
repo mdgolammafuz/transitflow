@@ -22,13 +22,18 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          
-          # Install the package in editable mode WITH dev dependencies.
-          # This reads pyproject.toml and installs pytest, pytest-asyncio, etc.
+          # Installs dependencies + dev tools (pytest) from pyproject.toml
           pip install -e ".[dev]"
 
+      - name: Load Configuration
+        # Retrieves the secret you created and writes it to the file path expected by conftest.py
+        env:
+          CI_ENV_CONTENT: ${{ secrets.CI_ENV_FILE }}
+        run: |
+          mkdir -p infra/local
+          echo "$CI_ENV_CONTENT" > infra/local/.env
+
       - name: Run Test Suite
-        # pytest will now automatically find config in pyproject.toml
         run: make test-all
 
   # STAGE 2: Continuous Deployment (CD)
@@ -46,34 +51,30 @@ jobs:
           port: 22
           timeout: 300s
           script: |
-            # Stop execution immediately if any command fails
             set -e
 
             echo "Starting Deployment..."
 
-            # 1. Navigate to Project Directory
             cd /home/golammafuzgm/transitflow
 
-            # 2. Pull Latest Changes
+            # 1. Pull Latest Changes
             git fetch origin main
             git reset --hard origin/main
 
-            # 3. Restart Services
-            # We assume 'make dev-up' handles docker-compose build and up
+            # 2. Restart Services
             make dev-down
             make dev-up
 
-            # 4. Post-Deployment Verification
             echo "Waiting 20 seconds for containers to stabilize..."
             sleep 20
 
-            # 5. Run Smoke Test
+            # 3. Smoke Test
             if docker ps | grep -q "serving-api"; then
-                # We execute the test inside the 'serving-api' container
                 docker exec -T serving-api python scripts/verify_ml_serving.py
             else
                 echo "WARNING: Container 'serving-api' not found. Checking generic docker ps..."
                 docker ps
-                exit 1 # Fail the deploy if the API is missing
+                exit 1
             fi
+            
             echo "Deployment Complete."
