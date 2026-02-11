@@ -23,13 +23,17 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
+          # FIX: Explicitly install testing libraries
+          pip install pytest pytest-spark flake8 pandas
+          
+          # Install project requirements if they exist
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          
           # Install the project in editable mode
           pip install -e .
 
       - name: Run Test Suite
-        # We use the existing make target as requested.
-        # This assumes 'make test-all' runs pytest on tests/ and its subfolders.
         run: make test-all
 
   # STAGE 2: Continuous Deployment (CD)
