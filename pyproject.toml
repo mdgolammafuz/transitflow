@@ -53,6 +53,7 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-spark>=0.6.0", # Added to support the 'spark' marker and fixtures
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "black>=24.1.0",
@@ -89,3 +90,37 @@ ignore = ["E501"]
 # Security scanning configuration
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101"] # B101 ignores 'assert' statements
+
+# --- Pytest Configuration (Migrated from pytest.ini) ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Execution Defaults
+addopts = "-v --tb=short --strict-markers --strict-config --asyncio-mode=auto"
+
+# Path Configuration
+pythonpath = ["."]
+
+# Test Markers
+markers = [
+    "unit: Fast, isolated tests with no external dependencies (Mocked data).",
+    "integration: Tests requiring active services (Postgres, MinIO, Redpanda).",
+    "spark: Tests that specifically require a local Spark Session.",
+    "slow: Tests that take more than 1 second to run."
+]
+
+# Warning Management
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore:Subprocess.*:ResourceWarning"
+]
+
+# Logging
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
