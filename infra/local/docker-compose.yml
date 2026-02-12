@@ -60,7 +60,7 @@ services:
         condition: service_healthy
     restart: always
 
-# --- Model Tracking (ROBUSTNESS FIX APPLIED) ---
+# --- Model Tracking ---
   mlflow:
     build:
       context: ../..
@@ -209,7 +209,7 @@ services:
     logging: *default-logging
     restart: always
 
-  # --- Message Broker (ROBUSTNESS FIX APPLIED) ---
+  # --- Message Broker ---
   redpanda:
     image: redpandadata/redpanda:v23.3.3
     container_name: redpanda
@@ -344,7 +344,7 @@ services:
       PYTHONPATH: /opt/spark/jobs
       MLFLOW_TRACKING_URI: http://mlflow:5000
     command: >
-      /bin/bash -c "pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny pytest pytest-spark python-dotenv pydantic pydantic-settings fastavro && /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master"
+      /bin/bash -c "pip3 install --no-cache-dir psycopg2-binary 'xgboost<2.0.0' structlog scikit-learn pandas mlflow-skinny pytest pytest-spark python-dotenv pydantic pydantic-settings fastavro && /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host 0.0.0.0"
     volumes:
       - ../../spark:/opt/spark/jobs/spark
       - ../../feature_store:/opt/spark/jobs/feature_store
@@ -399,7 +399,7 @@ services:
       - mlflow
     restart: always
 
-  # --- Storage (MinIO Server) (ROBUSTNESS FIX APPLIED) ---
+  # --- Storage (MinIO Server) ---
   minio:
     image: minio/minio:RELEASE.2024-01-13T07-53-03Z
     container_name: minio
@@ -413,7 +413,7 @@ services:
     logging: *default-logging
     volumes:
       - minio_data:/data
-    # FIX: MinIO is disk-heavy. Give it time to initialize storage.
+    # MinIO is disk-heavy. Give it time to initialize storage.
     healthcheck:
       test: ["CMD", "/usr/bin/mc", "ready", "local"]
       interval: 10s
