@@ -1,9 +1,9 @@
 .PHONY: help dev-up dev-down clean topics setup-test lint test-unit test-all \
-        verify-pipeline run run-full flink-build flink-submit \
-        spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
-        dbt-run dbt-test dbt-docs schema-register schema-check schema-list \
-        feature-api feature-sync feature-verify feature-test \
-        serving-api train-model serving-verify serving-test lakehouse-ls metadata-init
+	verify-pipeline run run-full flink-build flink-submit \
+	spark-bronze spark-silver spark-gold spark-reconcile dbt-deps dbt-seed dbt-snapshot \
+	dbt-run dbt-test dbt-docs schema-register schema-check schema-list \
+	feature-api feature-sync feature-verify feature-test \
+	serving-api train-model serving-verify serving-test lakehouse-ls metadata-init
 
 # --- Configuration ---
 # Loads credentials and service names from infra/local/.env
@@ -15,55 +15,56 @@ REGISTRY_URL := $(if $(SCHEMA_REGISTRY_URL),$(SCHEMA_REGISTRY_URL),http://localh
 SPARK_PKGS := "io.delta:delta-spark_2.12:3.0.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.6.0"
 # Detect TTY: Use '-it' if human, '-i' if CI/Automation
 INTERACTIVE := $(shell [ -t 0 ] && echo "it" || echo "i")
+
 # --- Environment Contexts ---
 
 # LOCAL_ENV: For tools running directly on your Mac (dbt, API, Scripts, Serving)
 LOCAL_ENV := POSTGRES_USER=$(POSTGRES_USER) \
-             POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
-             POSTGRES_DB=$(POSTGRES_DB) \
-             POSTGRES_HOST=127.0.0.1 \
-             POSTGRES_PORT=$(POSTGRES_PORT) \
-             POSTGRES_SCHEMA=marts \
-             REDIS_HOST=127.0.0.1 \
-             REDIS_PORT=$(REDIS_PORT) \
-             REDIS_PASSWORD=$(REDIS_PASSWORD) \
-             SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
-             FEATURE_API_URL=http://localhost:8000 \
-             SERVING_API_URL=http://localhost:8001 \
-             OTLP_ENDPOINT=http://localhost:4317
+	POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	POSTGRES_DB=$(POSTGRES_DB) \
+	POSTGRES_HOST=127.0.0.1 \
+	POSTGRES_PORT=$(POSTGRES_PORT) \
+	POSTGRES_SCHEMA=marts \
+	REDIS_HOST=127.0.0.1 \
+	REDIS_PORT=$(REDIS_PORT) \
+	REDIS_PASSWORD=$(REDIS_PASSWORD) \
+	SCHEMA_REGISTRY_URL=$(REGISTRY_URL) \
+	FEATURE_API_URL=http://localhost:8000 \
+	SERVING_API_URL=http://localhost:8001 \
+	OTLP_ENDPOINT=http://localhost:4317
 
 # DB_ENV: For tools running inside Docker (Spark)
 DB_ENV := POSTGRES_USER=$(POSTGRES_USER) \
-          POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
-          POSTGRES_DB=$(POSTGRES_DB) \
-          POSTGRES_HOST=$(POSTGRES_HOST) \
-          POSTGRES_PORT=$(POSTGRES_PORT) \
-          SCHEMA_REGISTRY_URL=$(REGISTRY_URL)
+	POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	POSTGRES_DB=$(POSTGRES_DB) \
+	POSTGRES_HOST=$(POSTGRES_HOST) \
+	POSTGRES_PORT=$(POSTGRES_PORT) \
+	SCHEMA_REGISTRY_URL=$(REGISTRY_URL)
 
 # dbt execution context (Mac-based)
 DBT := cd dbt && DBT_PROFILES_DIR=. $(LOCAL_ENV) dbt
 
 # Spark execution wrapper (Container-based)
 SPARK_SUBMIT := docker exec -$(INTERACTIVE) --env-file infra/local/.env \
-  -e KAFKA_BOOTSTRAP_SERVERS=redpanda:29092 \
-  -e POSTGRES_HOST=postgres \
-  -e MINIO_ENDPOINT=http://minio:9000 \
-  spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --conf spark.driver.host=spark-master \
-  --total-executor-cores 1 \
-  --executor-memory 2G \
-  --driver-memory 1G \
-  --packages $(SPARK_PKGS)
+	-e KAFKA_BOOTSTRAP_SERVERS=redpanda:29092 \
+	-e POSTGRES_HOST=postgres \
+	-e MINIO_ENDPOINT=http://minio:9000 \
+	spark-master /usr/bin/env PYTHONPATH=/opt/spark/jobs /opt/spark/bin/spark-submit \
+	--master spark://spark-master:7077 \
+	--conf spark.driver.host=spark-master \
+	--total-executor-cores 1 \
+	--executor-memory 2G \
+	--driver-memory 1G \
+	--packages $(SPARK_PKGS)
 
 # --- The S3A Bridge ---
 # Fixed: Uses Make variables $(VAR) so they are injected into the command line
 S3A_CONF := --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
-            --conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
-            --conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
-            --conf spark.hadoop.fs.s3a.path.style.access=true \
-            --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
-            --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false
+	--conf spark.hadoop.fs.s3a.access.key=$(MINIO_ROOT_USER) \
+	--conf spark.hadoop.fs.s3a.secret.key=$(MINIO_ROOT_PASSWORD) \
+	--conf spark.hadoop.fs.s3a.path.style.access=true \
+	--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+	--conf spark.hadoop.fs.s3a.connection.ssl.enabled=false
 
 help:
 	@echo "TransitFlow - Unified Pipeline Control"
@@ -162,9 +163,9 @@ flink-submit:
 # --- Delta Lake Processing (Spark) ---
 
 spark-bronze:
-  @echo "Starting Bronze Writer (Batch Mode)..."
-  # Added --once flag so it finishes and lets the next step run
-  $(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all --once
+	@echo "Starting Bronze Writer (Batch Mode)..."
+	# Added --once flag so it finishes and lets the next step run
+	$(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all --once
 
 spark-sync:
 	@echo "Syncing Lakehouse (MinIO) to Postgres Bronze for $(DATE)..."
@@ -189,7 +190,7 @@ spark-reconcile:
 spark-maintenance:
 	@echo "Running Lakehouse Maintenance for $(DATE)..."
 	$(SPARK_SUBMIT) $(S3A_CONF) /opt/spark/jobs/spark/maintenance.py --date $(DATE) --action all
-    
+
 spark-test:
 	@echo "Running Spark Unit Tests inside container..."
 	docker exec -$(INTERACTIVE) spark-master /usr/local/bin/pytest /opt/spark/jobs/tests/unit/spark/
@@ -198,19 +199,19 @@ spark-test:
 
 # Added backslashes for multi-line variable definition
 DBT_ENV = cd dbt && DBT_PROFILES_DIR=. \
-  POSTGRES_USER=$(POSTGRES_USER) \
-  POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
-  POSTGRES_DB=$(POSTGRES_DB) \
-  POSTGRES_HOST=$(POSTGRES_HOST) \
-  POSTGRES_PORT=$(POSTGRES_PORT) \
-  POSTGRES_SCHEMA=$(POSTGRES_SCHEMA) \
-  REDIS_HOST=$(REDIS_HOST) \
-  REDIS_PORT=$(REDIS_PORT) \
-  REDIS_PASSWORD=$(REDIS_PASSWORD) \
-  SCHEMA_REGISTRY_URL=$(SCHEMA_REGISTRY_URL) \
-  FEATURE_API_URL=$(FEATURE_API_URL) \
-  SERVING_API_URL=$(SERVING_API_URL) \
-  OTLP_ENDPOINT=$(OTLP_ENDPOINT)
+	POSTGRES_USER=$(POSTGRES_USER) \
+	POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	POSTGRES_DB=$(POSTGRES_DB) \
+	POSTGRES_HOST=$(POSTGRES_HOST) \
+	POSTGRES_PORT=$(POSTGRES_PORT) \
+	POSTGRES_SCHEMA=$(POSTGRES_SCHEMA) \
+	REDIS_HOST=$(REDIS_HOST) \
+	REDIS_PORT=$(REDIS_PORT) \
+	REDIS_PASSWORD=$(REDIS_PASSWORD) \
+	SCHEMA_REGISTRY_URL=$(SCHEMA_REGISTRY_URL) \
+	FEATURE_API_URL=$(FEATURE_API_URL) \
+	SERVING_API_URL=$(SERVING_API_URL) \
+	OTLP_ENDPOINT=$(OTLP_ENDPOINT)
 
 test-contracts:
 	@echo "Running Contract Unit Tests..."
@@ -259,7 +260,7 @@ verify-lakehouse:
 verify-pipeline:
 	@echo "Verifying Pipeline Integrity..."
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_pipeline.py --check-all
-  
+	
 lakehouse-ls:
 	@docker exec -$(INTERACTIVE) minio /usr/bin/mc alias set myminio http://localhost:9000 $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) > /dev/null
 	@docker exec -$(INTERACTIVE) minio /usr/bin/mc ls -r myminio/$(LAKEHOUSE_BUCKET)/
@@ -270,10 +271,10 @@ feature-api:
 
 feature-sync:
 	$(SPARK_SUBMIT) \
-    --master "local[*]" \
-    --conf spark.driver.host=localhost \
-    $(S3A_CONF) \
-    /opt/spark/jobs/feature_store/feature_sync.py $(DATE)
+	--master "local[*]" \
+	--conf spark.driver.host=localhost \
+	$(S3A_CONF) \
+	/opt/spark/jobs/feature_store/feature_sync.py $(DATE)
 
 feature-verify:
 	PYTHONPATH=$(CURDIR) $(LOCAL_ENV) python3 scripts/verify_feature_store.py --check-all
@@ -284,7 +285,7 @@ feature-test:
 train-model-locally:
 	@echo "Starting ML Training Pipeline (Docker execution)..."
 	docker exec -$(INTERACTIVE) serving-api python scripts/verify_train_model.py
-  
+	
 serving-api:
 	@echo "Starting ML Serving API..."
 	PYTHONPATH=$(CURDIR) \
@@ -307,7 +308,7 @@ serving-verify:
 	AWS_DEFAULT_REGION=us-east-1 \
 	SERVING_API_URL=http://localhost:8001 \
 	$(LOCAL_ENV) python3 scripts/verify_ml_serving.py --check-all
-  
+	
 serving-test:
 	PYTHONPATH=$(CURDIR) pytest tests/unit/ml_pipeline/ tests/unit/serving/ -v
 
