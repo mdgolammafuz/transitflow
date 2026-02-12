@@ -162,8 +162,9 @@ flink-submit:
 # --- Delta Lake Processing (Spark) ---
 
 spark-bronze:
-	@echo "Starting Streaming Bronze Writer..."
-	$(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all
+  @echo "Starting Bronze Writer (Batch Mode)..."
+  # Added --once flag so it finishes and lets the next step run
+  $(SPARK_SUBMIT) /opt/spark/jobs/spark/bronze_writer.py --table all --once
 
 spark-sync:
 	@echo "Syncing Lakehouse (MinIO) to Postgres Bronze for $(DATE)..."
